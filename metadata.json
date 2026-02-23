@@ -1,0 +1,8 @@
+{
+  "name": "Gestão Rural Simples",
+  "description": "Aplicativo intuitivo para registro de anomalias e gestão de fazenda, focado em simplicidade e acessibilidade.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
