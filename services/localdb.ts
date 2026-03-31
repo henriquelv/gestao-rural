@@ -86,6 +86,18 @@ export const localdb = {
     notifyChange(tableName);
   },
 
+  // Retorna registros com synced=false — usado para recuperar órfãos ao iniciar
+  async getUnsyncedRawRecords(tableName: string): Promise<{ id: string; data: any }[]> {
+    if (isNative) {
+      return await nativeDB.getUnsyncedRawRecords(tableName);
+    }
+    // @ts-ignore
+    const table = webDB[tableName];
+    if (!table) return [];
+    const records = await table.where('synced').equals(0).toArray();
+    return records.map((r: any) => ({ id: r.id, data: r.data }));
+  },
+
   subscribe(tableName: string, cb: ChangeCallback) {
     if (!_listeners[tableName]) _listeners[tableName] = new Set();
     _listeners[tableName].add(cb);

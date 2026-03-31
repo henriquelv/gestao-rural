@@ -378,9 +378,49 @@ async function migrateRaspagemToConforto() {
   }
 }
 
+// Recupera registros órfãos: synced=false sem entrada correspondente no outbox.
+// Ocorre quando o app trava entre a escrita local e a escrita no outbox.
+// Os registros ficam visíveis localmente mas nunca sobem pro servidor.
+async function recoverOrphanedRecords(): Promise<void> {
+  const tables = ['anomalies', 'instructions', 'notices', 'improvements', 'farm_docs',
+    'daily_metrics', 'milk_daily'];
+  try {
+    const pending = await localdb.getPendingOutbox();
+    const outboxKeys = new Set(pending.map(item => {
+      const p = item.payload;
+      if (!p) return '';
+      let id: string;
+      if (item.tableName === 'daily_metrics' && p.date && p.type) id = `${p.date}_${p.type}`;
+      else id = p.id ?? p.date ?? '';
+      return `${item.tableName}:${id}`;
+    }));
+
+    let count = 0;
+    for (const tableName of tables) {
+      const unsynced = await localdb.getUnsyncedRawRecords(tableName);
+      for (const record of unsynced) {
+        if (!record.data) continue;
+        const key = `${tableName}:${record.id}`;
+        if (!outboxKeys.has(key)) {
+          await localdb.addToOutbox({ tableName, op: 'upsert', payload: record.data, created_at: nowISO(), status: 'pending' });
+          count++;
+          console.log(`[Recovery] Registro órfão re-enfileirado: ${tableName}/${record.id}`);
+        }
+      }
+    }
+    if (count > 0) {
+      console.log(`[Recovery] ${count} registro(s) órfão(s) recuperado(s) para sincronização.`);
+      notify(`${count} registro(s) recuperado(s) para sincronização.`, 'info');
+    }
+  } catch (e) {
+    console.error('[Recovery] Erro na recuperação de registros órfãos:', e);
+  }
+}
+
 export const db = {
   syncPendingData: () => syncService.syncAll(),
   migrateRaspagemToConforto,
+  recoverOrphanedRecords,
 
   getSyncStatus: async () => {
     try {

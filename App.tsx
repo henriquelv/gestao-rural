@@ -160,6 +160,9 @@ const App: React.FC = () => {
           localStorage.setItem(METRICS_SYNC_RESET_FLAG, 'true');
         }
 
+        // Recuperar registros que ficaram órfãos (synced=false sem entrada no outbox)
+        await db.recoverOrphanedRecords();
+
         window.dispatchEvent(new CustomEvent('app-sync-start', { detail: { label: 'dados do servidor' } }));
         await db.refreshFromServer();
         await db.migrateRaspagemToConforto();

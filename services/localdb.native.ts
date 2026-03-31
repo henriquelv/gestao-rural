@@ -161,6 +161,22 @@ class NativeFarmDatabase {
     if (!this.db) await this.init();
     await this.db?.run(`UPDATE outbox SET status = 'pending', error_message = NULL WHERE status = 'error'`);
   }
+
+  async getUnsyncedRawRecords(tableName: string): Promise<{ id: string; data: any }[]> {
+    if (!this.db) await this.init();
+    const res = await this.db?.query(
+      `SELECT id, data FROM kv_store WHERE table_name = ? AND synced = 0`,
+      [tableName]
+    );
+    return (res?.values || []).reduce((acc: { id: string; data: any }[], v) => {
+      try {
+        acc.push({ id: v.id, data: JSON.parse(v.data) });
+      } catch (e) {
+        console.error(`Erro ao parsear registro órfão ${tableName}/${v.id}:`, e);
+      }
+      return acc;
+    }, []);
+  }
 }
 
 export const nativeDB = new NativeFarmDatabase();
