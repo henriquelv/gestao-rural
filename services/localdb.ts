@@ -56,6 +56,7 @@ export const localdb = {
   async put(tableName: string, record: LocalRecord): Promise<void> {
     if (isNative) {
       await nativeDB.put(tableName, record);
+      notifyChange(tableName);
       return;
     }
     // @ts-ignore
@@ -66,6 +67,7 @@ export const localdb = {
   async bulkPut(tableName: string, records: LocalRecord[]): Promise<void> {
     if (isNative) {
       for (const r of records) await nativeDB.put(tableName, r);
+      notifyChange(tableName);
       return;
     }
     // @ts-ignore
@@ -76,6 +78,7 @@ export const localdb = {
   async delete(tableName: string, id: string): Promise<void> {
     if (isNative) {
       await nativeDB.delete(tableName, id);
+      notifyChange(tableName);
       return;
     }
     // @ts-ignore

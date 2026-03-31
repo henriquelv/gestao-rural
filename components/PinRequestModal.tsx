@@ -8,9 +8,10 @@ interface PinRequestModalProps {
   onSuccess: () => void;
   onClose: () => void;
   title?: string;
+  description?: string;
 }
 
-export const PinRequestModal: React.FC<PinRequestModalProps> = ({ onSuccess, onClose, title = "Autorização Necessária" }) => {
+export const PinRequestModal: React.FC<PinRequestModalProps> = ({ onSuccess, onClose, title = "Autorização Necessária", description = "Digite o PIN para realizar esta alteração." }) => {
   const [pin, setPin] = useState('');
 
   const handleLogin = (e: React.FormEvent) => {
@@ -39,14 +40,16 @@ export const PinRequestModal: React.FC<PinRequestModalProps> = ({ onSuccess, onC
                 <Lock size={28} className="text-blue-600" />
             </div>
             <h2 className="text-lg font-bold text-gray-800 text-center mb-1">{title}</h2>
-            <p className="text-gray-400 text-xs text-center mb-6">Digite o PIN para realizar esta alteração.</p>
+            <p className="text-gray-400 text-xs text-center mb-6">{description}</p>
             
             <form onSubmit={handleLogin} className="w-full">
-                <input 
-                    type="tel" 
-                    maxLength={4} 
+                <input
+                    type="tel"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    maxLength={4}
                     value={pin}
-                    onChange={e => setPin(e.target.value)}
+                    onChange={e => setPin(e.target.value.replace(/\D/g, ''))}
                     className="w-full text-center text-4xl font-black tracking-[0.5em] p-3 bg-gray-50 rounded-xl border-2 border-gray-200 focus:border-blue-500 outline-none mb-6"
                     placeholder="••••"
                     autoFocus

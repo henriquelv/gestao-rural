@@ -6,6 +6,7 @@ const DB_NAME = 'FarmDB_Native_v1';
 class NativeFarmDatabase {
   private sqlite: SQLiteConnection;
   private db: SQLiteDBConnection | null = null;
+  private initPromise: Promise<void> | null = null;
 
   constructor() {
     this.sqlite = new SQLiteConnection(CapacitorSQLite);
@@ -13,7 +14,10 @@ class NativeFarmDatabase {
 
   async init() {
     if (!Capacitor.isNativePlatform()) return;
+    if (this.db) return;
+    if (this.initPromise) return this.initPromise;
 
+    this.initPromise = (async () => {
     try {
       this.db = await this.sqlite.createConnection(DB_NAME, false, 'no-encryption', 1, false);
       await this.db.open();
@@ -42,14 +46,23 @@ class NativeFarmDatabase {
       console.log('SQLite Native Initialized');
     } catch (e) {
       console.error('Erro init SQLite', e);
+      this.initPromise = null;
     }
+    })();
+
+    return this.initPromise;
   }
 
   async get(tableName: string, id: string) {
     if (!this.db) await this.init();
     const res = await this.db?.query(`SELECT data FROM kv_store WHERE table_name = ? AND id = ?`, [tableName, id]);
     if (res?.values && res.values.length > 0) {
-      return JSON.parse(res.values[0].data);
+      try {
+        return JSON.parse(res.values[0].data);
+      } catch (e) {
+        console.error(`Registro corrompido em ${tableName}/${id}, ignorando:`, e);
+        return null;
+      }
     }
     return null;
   }
@@ -57,7 +70,14 @@ class NativeFarmDatabase {
   async getAll(tableName: string, orderByField?: string) {
     if (!this.db) await this.init();
     const res = await this.db?.query(`SELECT data FROM kv_store WHERE table_name = ?`, [tableName]);
-    const items = res?.values?.map((v) => JSON.parse(v.data)) || [];
+    const items = (res?.values || []).reduce((acc: any[], v) => {
+      try {
+        acc.push(JSON.parse(v.data));
+      } catch (e) {
+        console.error(`Registro corrompido em ${tableName}, ignorando:`, e);
+      }
+      return acc;
+    }, []);
 
     if (orderByField) {
       items.sort((a: any, b: any) => (a[orderByField] > b[orderByField] ? -1 : 1));
@@ -96,13 +116,14 @@ class NativeFarmDatabase {
   async getPendingOutbox() {
     if (!this.db) await this.init();
     const res = await this.db?.query(`SELECT * FROM outbox WHERE status = 'pending' ORDER BY created_at ASC`);
-    return (
-      res?.values?.map((v) => ({
-        ...v,
-        payload: JSON.parse(v.payload),
-        tableName: v.table_name
-      })) || []
-    );
+    return (res?.values || []).reduce((acc: any[], v) => {
+      try {
+        acc.push({ ...v, payload: JSON.parse(v.payload), tableName: v.table_name });
+      } catch (e) {
+        console.error('Outbox payload corrompido, ignorando:', e);
+      }
+      return acc;
+    }, []);
   }
 
   async getOutboxErrors(limit: number = 50) {
@@ -111,14 +132,14 @@ class NativeFarmDatabase {
       `SELECT * FROM outbox WHERE status = 'error' ORDER BY created_at DESC LIMIT ?`,
       [limit]
     );
-    return (
-      res?.values?.map((v) => ({
-        ...v,
-        payload: JSON.parse(v.payload),
-        tableName: v.table_name,
-        errorMessage: v.error_message
-      })) || []
-    );
+    return (res?.values || []).reduce((acc: any[], v) => {
+      try {
+        acc.push({ ...v, payload: JSON.parse(v.payload), tableName: v.table_name, errorMessage: v.error_message });
+      } catch (e) {
+        console.error('Outbox error payload corrompido, ignorando:', e);
+      }
+      return acc;
+    }, []);
   }
 
   async markOutboxDone(id: number) {
