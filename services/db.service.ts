@@ -1,9 +1,10 @@
- 
+
 import { Anomaly, Instruction, Notice, Improvement, FarmDoc, DailyMilk, MonthlyStats, Employee, FarmSettings, UIConfig, UIBlock, DailyMetric, Sector } from '../types';
 import { supabase } from './supabase';
 import { notify } from './notification.service';
 import { localdb } from './localdb';
 import { syncService } from './sync.service';
+import { mediaService } from './media.service';
 
 const isOnline = () => navigator.onLine;
 const nowISO = () => new Date().toISOString();
@@ -20,6 +21,7 @@ const setLastRefresh = (tableName: string, iso: string) => {
   try {
     localStorage.setItem(lastRefreshKey(tableName), iso);
   } catch {
+    // ignore
   }
 };
 
@@ -29,9 +31,13 @@ const getTimestampFieldForTable = (tableName: string): string | null => {
   if (tableName === 'notices') return 'createdAt';
   if (tableName === 'improvements') return 'createdAt';
   if (tableName === 'farm_docs') return 'updatedAt';
-  if (tableName === 'milk_daily') return 'date';
-  if (tableName === 'daily_metrics') return 'date';
-  if (tableName === 'farm_monthly_stats') return 'monthKey';
+  // daily_metrics, milk_daily e farm_monthly_stats usam 'date'/'monthKey' como chave
+  // de negócio, não como timestamp de modificação. Delta sync por esse campo faz com que
+  // edições em datas retroativas nunca cheguem em outros dispositivos. Fazemos fetch
+  // completo para essas tabelas (são pequenas) garantindo consistência entre celulares.
+  if (tableName === 'milk_daily') return null;
+  if (tableName === 'daily_metrics') return null;
+  if (tableName === 'farm_monthly_stats') return null;
   return null;
 };
 
@@ -86,8 +92,14 @@ const DEFAULT_UI_BUTTONS: UIBlock[] = [
   { id: 'a1', screen: 'anomalies_menu', type: 'button', label: 'ADICIONAR ANOMALIA', color: 'green', iconType: 'lucide', iconValue: 'plus', route: '/anomalies/add', order: 1, visible: true },
   { id: 'a2', screen: 'anomalies_menu', type: 'button', label: 'LISTA DE ANOMALIAS', color: 'blue', iconType: 'lucide', iconValue: 'list', route: '/anomalies/list', order: 2, visible: true },
   { id: 'a3', screen: 'anomalies_menu', type: 'button', label: 'QUANTIDADE DE ANOMALIAS', color: 'purple', iconType: 'lucide', iconValue: 'bar-chart', route: '/anomalies/quantity', order: 3, visible: true },
-  { id: 'i1', screen: 'instructions_menu', type: 'button', label: 'ADICIONAR INSTRUÇÃO', color: 'green', iconType: 'lucide', iconValue: 'plus', route: '/instructions/add', order: 1, visible: true },
-  { id: 'i2', screen: 'instructions_menu', type: 'button', label: 'LISTA INSTRUÇÕES', color: 'blue', iconType: 'lucide', iconValue: 'list', route: '/instructions/list', order: 2, visible: true },
+  { id: 'i1', screen: 'instructions_menu', type: 'button', label: 'ALIMENTAÇÃO', color: 'yellow', iconType: 'lucide', iconValue: 'box', route: '/instructions/Alimentação', order: 1, visible: true },
+  { id: 'i2', screen: 'instructions_menu', type: 'button', label: 'MANEJO', color: 'green', iconType: 'lucide', iconValue: 'activity', route: '/instructions/Manejo', order: 2, visible: true },
+  { id: 'i3', screen: 'instructions_menu', type: 'button', label: 'CRIAÇÃO', color: 'orange', iconType: 'lucide', iconValue: 'baby', route: '/instructions/Criação', order: 3, visible: true },
+  { id: 'i4', screen: 'instructions_menu', type: 'button', label: 'MATERNIDADE', color: 'purple', iconType: 'lucide', iconValue: 'heart', route: '/instructions/Maternidade', order: 4, visible: true },
+  { id: 'i5', screen: 'instructions_menu', type: 'button', label: 'CONFORTO', color: 'blue', iconType: 'lucide', iconValue: 'thermometer', route: '/instructions/Conforto', order: 5, visible: true },
+  { id: 'i6', screen: 'instructions_menu', type: 'button', label: 'ORDENHA', color: 'red', iconType: 'lucide', iconValue: 'droplet', route: '/instructions/Ordenha', order: 6, visible: true },
+  { id: 'i7', screen: 'instructions_menu', type: 'button', label: 'SERVIÇOS EXTERNOS', color: 'pink', iconType: 'lucide', iconValue: 'tractor', route: '/instructions/Serviços Externos', order: 7, visible: true },
+  { id: 'i8', screen: 'instructions_menu', type: 'button', label: 'ADMINISTRAÇÃO', color: 'gray', iconType: 'lucide', iconValue: 'clipboard', route: '/instructions/Administração', order: 8, visible: true },
   { id: 'n1', screen: 'notices_menu', type: 'button', label: 'NOVO COMUNICADO', color: 'green', iconType: 'lucide', iconValue: 'plus', route: '/notices/add', order: 1, visible: true },
   { id: 'n2', screen: 'notices_menu', type: 'button', label: 'LISTA COMUNICADOS', color: 'blue', iconType: 'lucide', iconValue: 'list', route: '/notices/list', order: 2, visible: true },
   { id: 'm1', screen: 'improvements_menu', type: 'button', label: 'REGISTRAR MELHORIA', color: 'green', iconType: 'lucide', iconValue: 'plus', route: '/improvements/add', order: 1, visible: true },
@@ -98,7 +110,8 @@ const DEFAULT_UI_BUTTONS: UIBlock[] = [
   { id: 'd4', screen: 'farm_data_menu', type: 'button', label: 'NASCIMENTOS', color: 'purple', iconType: 'lucide', iconValue: 'baby', route: '/data/births', order: 4, visible: true },
   { id: 'nm1', screen: 'norms_menu', type: 'button', label: 'ADICIONAR NORMA', color: 'green', iconType: 'lucide', iconValue: 'plus', route: '/norms/create', order: 1, visible: true },
   { id: 'nm2', screen: 'norms_menu', type: 'button', label: 'ATUALIZAR NORMA', color: 'orange', iconType: 'lucide', iconValue: 'refresh-cw', route: '/norms/update', order: 2, visible: true },
-  { id: 'nm3', screen: 'norms_menu', type: 'button', label: 'LISTA DE NORMAS', color: 'blue', iconType: 'lucide', iconValue: 'list', route: '/norms/list', order: 3, visible: true }
+  { id: 'nm3', screen: 'norms_menu', type: 'button', label: 'LISTA DE NORMAS', color: 'blue', iconType: 'lucide', iconValue: 'list', route: '/norms/list', order: 3, visible: true },
+  { id: 'force_update_v3', screen: 'none', type: 'button', label: 'DUMMY', color: 'gray', iconType: 'lucide', iconValue: 'alert', route: '', order: 99, visible: false }
 ];
 
 const DEFAULT_UI_CONFIG: UIConfig = { buttons: DEFAULT_UI_BUTTONS, customPages: [] };
@@ -177,6 +190,7 @@ async function refreshFromServer(tableName: string): Promise<void> {
       const { data: allData, error: allErr } = await baseQuery;
       if (!allErr && allData) data = allData;
     } catch {
+      // ignore
     }
   }
 
@@ -195,6 +209,24 @@ async function refreshFromServer(tableName: string): Promise<void> {
   }));
 
   await localdb.bulkPut(tableName, records);
+
+  // Ghost Record Cleanup: roda em carga completa (sem last refresh) OU quando
+  // a tabela sempre faz fetch completo (tsField === null), garantindo que registros
+  // deletados no servidor sejam removidos localmente em todos os dispositivos.
+  if (!last || !tsField) {
+    try {
+      const serverIds = new Set(records.map(r => r.id));
+      const localItems = await localdb.getAll<any>(tableName);
+      for (const localItem of localItems) {
+        if (localItem.synced && !serverIds.has(localItem.id)) {
+          console.log(`Limpando registro fantasma em ${tableName}: ${localItem.id}`);
+          await localdb.delete(tableName, localItem.id);
+        }
+      }
+    } catch (cleanupErr) {
+      console.error(`Erro no Ghost Cleanup de ${tableName}:`, cleanupErr);
+    }
+  }
 
   try {
     if (tsField) {
@@ -296,7 +328,7 @@ async function migrateRaspagemToConforto() {
   try {
     const anomalies = await localdb.getAll<any>('anomalies');
     const hasRaspagem = anomalies.some(a => a.data?.sector === 'Raspagem');
-    
+
     if (hasRaspagem) {
       console.log('Migrando anomalias: Raspagem → Conforto');
       const updated = anomalies.map(a => {
@@ -310,7 +342,7 @@ async function migrateRaspagemToConforto() {
         }
         return a;
       });
-      
+
       await localdb.bulkPut('anomalies', updated);
       console.log(`✅ ${updated.filter(a => a.data?.sector === 'Conforto').length} anomalias migradas`);
       notify('Anomalias atualizadas (Raspagem → Conforto)', 'success');
@@ -351,6 +383,18 @@ export const db = {
     await localdb.retryOutboxItem(id);
   },
 
+  clearSyncErrors: async () => {
+    try {
+      const errs = await localdb.getOutboxErrors(100);
+      for (const e of errs) {
+        if (e.id) await localdb.deleteOutboxItem(e.id);
+      }
+      notify('Erros de sincronização limpos.', 'info');
+    } catch (e) {
+      console.error('Erro ao limpar outbox:', e);
+    }
+  },
+
   refreshFromServer: async () => {
     try {
       if (!isOnline()) return;
@@ -373,6 +417,16 @@ export const db = {
     }
   },
 
+  refreshDailyMetrics: async () => {
+    if (!isOnline()) return;
+    await refreshFromServer('daily_metrics');
+  },
+
+  refreshMilkDaily: async () => {
+    if (!isOnline()) return;
+    await refreshFromServer('milk_daily');
+  },
+
   getSettings: async (): Promise<FarmSettings> => {
     const res = await smartRead<FarmSettings>('settings', [MOCK_SETTINGS], '');
     return res[0] || MOCK_SETTINGS;
@@ -382,17 +436,17 @@ export const db = {
   getUIConfig: async (): Promise<UIConfig> => {
     const res = await smartRead<UIConfig>('ui_config', [DEFAULT_UI_CONFIG], '');
     const current = res[0] || DEFAULT_UI_CONFIG;
-    
+
     // Verificar se faltam botões (atualização de versão)
     const currentIds = new Set(current.buttons.map(b => b.id));
     const defaultIds = new Set(DEFAULT_UI_CONFIG.buttons.map(b => b.id));
-    
+
     // Se faltam IDs, atualizar para a versão padrão
     if (defaultIds.size > currentIds.size) {
       await db.saveUIConfig(DEFAULT_UI_CONFIG);
       return DEFAULT_UI_CONFIG;
     }
-    
+
     return current;
   },
   saveUIConfig: async (c: UIConfig) => smartWrite('ui_config', { id: '1', ...c }, 'upsert'),
@@ -427,32 +481,83 @@ export const db = {
   removeEmployee: async (id: string) => smartWrite('employees', id, 'delete'),
 
   getAnomalies: async () => smartRead<Anomaly>('anomalies', [], 'createdAt'),
-  addAnomaly: async (a: Anomaly) => smartWrite('anomalies', a, 'insert'),
+  addAnomaly: async (a: Anomaly) => {
+    try {
+      const all = await db.getAnomalies();
+      if (all.length >= 100) {
+        const oldest = all.sort((x, y) => new Date(x.createdAt).getTime() - new Date(y.createdAt).getTime())[0];
+        if (oldest) await db.deleteAnomaly(oldest.id);
+      }
+    } catch (e) {
+      console.error('Erro ao limpar limite de anomalias:', e);
+    }
+    return smartWrite('anomalies', a, 'upsert');
+  },
   updateAnomaly: async (a: Anomaly) => smartWrite('anomalies', a, 'update'),
-  deleteAnomaly: async (id: string) => smartWrite('anomalies', id, 'delete'),
+  deleteAnomaly: async (id: string) => {
+    const item = await localdb.getById<Anomaly>('anomalies', id);
+    if (item && item.media) {
+      for (const m of item.media) {
+        await mediaService.deleteMedia(m);
+      }
+    }
+    return smartWrite('anomalies', id, 'delete');
+  },
   getAnomalyById: async (id: string) => await localdb.getById<Anomaly>('anomalies', id),
 
   getInstructions: async () => smartRead<Instruction>('instructions', [], 'createdAt'),
-  addInstruction: async (i: Instruction) => smartWrite('instructions', i, 'insert'),
+  addInstruction: async (i: Instruction) => smartWrite('instructions', i, 'upsert'),
   updateInstruction: async (i: Instruction) => smartWrite('instructions', i, 'update'),
-  deleteInstruction: async (id: string) => smartWrite('instructions', id, 'delete'),
+  deleteInstruction: async (id: string) => {
+    const item = await localdb.getById<Instruction>('instructions', id);
+    if (item && item.media) {
+      for (const m of item.media) {
+        await mediaService.deleteMedia(m);
+      }
+    }
+    return smartWrite('instructions', id, 'delete');
+  },
+  getInstructionById: async (id: string) => await localdb.getById<Instruction>('instructions', id),
 
   getNotices: async () => smartRead<Notice>('notices', [], 'createdAt'),
-  addNotice: async (n: Notice) => smartWrite('notices', n, 'insert'),
+  addNotice: async (n: Notice) => smartWrite('notices', n, 'upsert'),
   updateNotice: async (n: Notice) => smartWrite('notices', n, 'update'),
-  deleteNotice: async (id: string) => smartWrite('notices', id, 'delete'),
+  deleteNotice: async (id: string) => {
+    const item = await localdb.getById<Notice>('notices', id);
+    if (item && item.media) {
+      for (const m of item.media) {
+        await mediaService.deleteMedia(m);
+      }
+    }
+    return smartWrite('notices', id, 'delete');
+  },
 
   getImprovements: async () => smartRead<Improvement>('improvements', [], 'createdAt'),
-  addImprovement: async (i: Improvement) => smartWrite('improvements', i, 'insert'),
+  addImprovement: async (i: Improvement) => smartWrite('improvements', i, 'upsert'),
   updateImprovement: async (i: Improvement) => smartWrite('improvements', i, 'update'),
-  deleteImprovement: async (id: string) => smartWrite('improvements', id, 'delete'),
+  deleteImprovement: async (id: string) => {
+    const item = await localdb.getById<Improvement>('improvements', id);
+    if (item && item.media) {
+      for (const m of item.media) {
+        await mediaService.deleteMedia(m);
+      }
+    }
+    return smartWrite('improvements', id, 'delete');
+  },
+  getImprovementById: async (id: string) => await localdb.getById<Improvement>('improvements', id),
 
   getFarmDocs: async () => smartRead<FarmDoc>('farm_docs', [], 'updatedAt'),
   getFarmDoc: async (id: string) => await localdb.getById<FarmDoc>('farm_docs', id),
   addFarmDoc: async (d: FarmDoc) => smartWrite('farm_docs', d, 'upsert'),
   saveFarmDoc: async (d: FarmDoc) => smartWrite('farm_docs', d, 'upsert'),
   updateFarmDoc: async (d: FarmDoc) => smartWrite('farm_docs', d, 'update'),
-  deleteFarmDoc: async (id: string) => smartWrite('farm_docs', id, 'delete'),
+  deleteFarmDoc: async (id: string) => {
+    const item = await localdb.getById<FarmDoc>('farm_docs', id);
+    if (item && item.media) {
+      await mediaService.deleteMedia(item.media);
+    }
+    return smartWrite('farm_docs', id, 'delete');
+  },
 
   getMilkHistory: async () => smartRead<DailyMilk>('milk_daily', [], 'date'),
   addMilkEntry: async (entry: DailyMilk) => smartWrite('milk_daily', entry, 'upsert', 'date'),

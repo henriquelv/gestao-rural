@@ -7,6 +7,7 @@ import { PinGuard } from './components/PinGuard';
 import { db } from './services/db.service';
 import { notify } from './services/notification.service';
 import { syncService } from './services/sync.service';
+import { seedImageData } from './services/seed.service';
 
 // Anomalias
 import { AnomaliesMenuScreen } from './screens/AnomaliesMenuScreen';
@@ -20,6 +21,7 @@ import { InstructionsMenuScreen } from './screens/instructions/InstructionsMenuS
 import { InstructionsSectorMenuScreen } from './screens/instructions/InstructionsSectorMenuScreen';
 import { AddInstructionScreen } from './screens/instructions/AddInstructionScreen';
 import { ListInstructionsScreen } from './screens/instructions/ListInstructionsScreen';
+import { InstructionDetailScreen } from './screens/instructions/InstructionDetailScreen';
 
 // Normas
 import { FarmNormsMenuScreen } from './screens/instructions/FarmNormsMenuScreen';
@@ -35,6 +37,7 @@ import { UpdateNormsScreen } from './screens/UpdateNormsScreen';
 import { NoticesMenuScreen } from './screens/notices/NoticesMenuScreen';
 import { AddNoticeScreen } from './screens/notices/AddNoticeScreen';
 import { ListNoticesScreen } from './screens/notices/ListNoticesScreen';
+import { NoticeDetailScreen } from './screens/notices/NoticeDetailScreen';
 
 // Melhorias
 import { ImprovementsMenuScreen } from './screens/improvements/ImprovementsMenuScreen';
@@ -69,6 +72,7 @@ const App: React.FC = () => {
         };
         localStorage.setItem('last_runtime_error', JSON.stringify(entry));
       } catch {
+        // ignore
       }
     };
 
@@ -97,11 +101,11 @@ const App: React.FC = () => {
       const handler = () => {
         const hash = window.location.hash || '#/';
         const isHome = hash === '#/' || hash === '#';
-        
+
         if (!isHome) {
           // Padrão: voltar apenas 1 nível
           window.history.back();
-          
+
           // Se após 500ms ainda estiver na mesma rota, força home (evita loop)
           const currentHash = window.location.hash;
           setTimeout(() => {
@@ -111,7 +115,7 @@ const App: React.FC = () => {
           }, 500);
           return;
         }
-        
+
         // Na home, sai do app
         CapApp.exitApp();
       };
@@ -134,9 +138,32 @@ const App: React.FC = () => {
       running = true;
       window.dispatchEvent(new CustomEvent('app-sync-start'));
       try {
+        // One-time cleanup of blocking sync errors (duplicate keys)
+        const ERROR_CLEANUP_FLAG = 'error_cleanup_v1';
+        if (!localStorage.getItem(ERROR_CLEANUP_FLAG)) {
+          console.log('[App] Executando limpeza inicial de erros de sincronização...');
+          await db.clearSyncErrors();
+          localStorage.setItem(ERROR_CLEANUP_FLAG, 'true');
+        }
+
+        // One-time reset: remove timestamps de delta-sync de tabelas de métricas.
+        // Essas tabelas usavam 'date' como campo de filtro (incorreto — é chave de
+        // negócio, não timestamp de modificação), causando dados divergentes entre
+        // dispositivos. Agora sempre fazem fetch completo; o reset garante que o
+        // ghost-cleanup rode uma vez para remover registros obsoletos.
+        const METRICS_SYNC_RESET_FLAG = 'metrics_sync_reset_v1';
+        if (!localStorage.getItem(METRICS_SYNC_RESET_FLAG)) {
+          console.log('[App] Resetando timestamps de sync de métricas para forçar fetch completo...');
+          localStorage.removeItem('last_refresh_daily_metrics');
+          localStorage.removeItem('last_refresh_milk_daily');
+          localStorage.removeItem('last_refresh_farm_monthly_stats');
+          localStorage.setItem(METRICS_SYNC_RESET_FLAG, 'true');
+        }
+
         await db.refreshFromServer();
         await db.migrateRaspagemToConforto();
         await db.syncPendingData();
+        await seedImageData();
       } catch (error) {
         console.error('Erro durante sync cycle:', error);
       } finally {
@@ -175,7 +202,7 @@ const App: React.FC = () => {
       <Routes>
         {/* --- ROTAS LIVRES (Free Access) --- */}
         <Route path="/" element={<HomeScreen />} />
-        
+
         {/* Anomalias: ADICIONAR LIVRE */}
         <Route path="/anomalies" element={<AnomaliesMenuScreen />} />
         <Route path="/anomalies/add" element={<AddAnomalyScreen />} />
@@ -187,6 +214,7 @@ const App: React.FC = () => {
         <Route path="/notices" element={<NoticesMenuScreen />} />
         <Route path="/notices/add" element={<AddNoticeScreen />} />
         <Route path="/notices/list" element={<ListNoticesScreen />} />
+        <Route path="/notices/detail/:id" element={<NoticeDetailScreen />} />
 
         {/* Melhorias: ADICIONAR LIVRE */}
         <Route path="/improvements" element={<ImprovementsMenuScreen />} />
@@ -197,6 +225,7 @@ const App: React.FC = () => {
         <Route path="/instructions" element={<InstructionsMenuScreen />} />
         <Route path="/instructions/:sector" element={<InstructionsSectorMenuScreen />} />
         <Route path="/instructions/list" element={<ListInstructionsScreen />} />
+        <Route path="/instructions/detail/:id" element={<InstructionDetailScreen />} />
         <Route path="/instructions/add" element={<PinGuard title="Adicionar Instrução"><AddInstructionScreen /></PinGuard>} />
 
         {/* --- NORMAS E ORGANIZAÇÃO --- */}
@@ -207,16 +236,16 @@ const App: React.FC = () => {
         <Route path="/norms/list" element={<FarmNormsListScreen />} />
         <Route path="/norms/create" element={<PinGuard title="Adicionar Norma"><FarmNormsScreen /></PinGuard>} />
         <Route path="/norms/update" element={<PinGuard title="Atualizar Normas"><UpdateNormsScreen /></PinGuard>} />
-        
+
         {/* 2. Submenu de Opções (LIVRE) */}
         <Route path="/norms/:categoryId/options" element={<NormCategoryMenuScreen />} />
-        
+
         {/* 3. Lista de Documentos (LIVRE) */}
         <Route path="/norms/:categoryId/list" element={<NormsCategoryListScreen />} />
-        
+
         {/* 4. Adicionar Documento na Categoria - PROTEGIDO (PinGuard) */}
         <Route path="/norms/:categoryId/add" element={<PinGuard title="Adicionar Norma"><AddNormSimpleScreen /></PinGuard>} />
-        
+
         {/* Visualizador de Documento Individual - LIVRE (Delete/Edit protegido internamente) */}
         <Route path="/norms/view/:docId" element={<StandardDocScreen />} />
 
@@ -235,7 +264,7 @@ const App: React.FC = () => {
 
         {/* Configurações - proteger acesso com PIN */}
         <Route path="/settings" element={<PinGuard title="Configurações"><SettingsScreen /></PinGuard>} />
-        
+
       </Routes>
     </HashRouter>
   );
