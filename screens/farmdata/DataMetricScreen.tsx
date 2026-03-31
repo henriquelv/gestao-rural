@@ -3,7 +3,7 @@ import React, { useState, useEffect } from 'react';
 import { Layout } from '../../components/Layout';
 import { Header } from '../../components/Header';
 import { FieldLabel } from '../../components/FieldLabel';
-import { Save, TrendingUp, Calculator, Calendar, Clock, BarChart2, Lock, Edit2, Trash2, X } from 'lucide-react';
+import { Save, TrendingUp, Calculator, Calendar, Clock, BarChart2, Lock, Edit2, Trash2, X, Download } from 'lucide-react';
 import { db } from '../../services/db.service';
 import { notify } from '../../services/notification.service';
 import { DailyMilk, DailyMetric } from '../../types';
@@ -25,6 +25,7 @@ export const DataMetricScreen: React.FC<DataMetricScreenProps> = ({ type }) => {
     return `${y}-${m}-${d}`;
   });
   
+  const [isLoading, setIsLoading] = useState(false);
   const [showPinModal, setShowPinModal] = useState(false);
   const [pendingProtectedAction, setPendingProtectedAction] = useState<(() => Promise<void>) | null>(null);
   const [editingEntry, setEditingEntry] = useState<any | null>(null);
@@ -89,8 +90,12 @@ export const DataMetricScreen: React.FC<DataMetricScreenProps> = ({ type }) => {
     return new Date(`${d}T00:00:00`);
   };
 
-  const load = async () => {
+  const load = async (silent = false) => {
     try {
+      if (!silent) setIsLoading(true);
+      // Busca dados frescos do servidor (ignorado automaticamente se offline)
+      if (type === 'milk') await db.refreshMilkDaily();
+      else await db.refreshDailyMetrics();
       let data;
       if (type === 'milk') data = await db.getMilkHistory();
       else data = await db.getDailyMetrics(type);
@@ -98,6 +103,8 @@ export const DataMetricScreen: React.FC<DataMetricScreenProps> = ({ type }) => {
     } catch (e) {
       console.error('Erro ao carregar dados:', e);
       setHistory([]);
+    } finally {
+      if (!silent) setIsLoading(false);
     }
   };
 
@@ -154,7 +161,7 @@ export const DataMetricScreen: React.FC<DataMetricScreenProps> = ({ type }) => {
     else await db.addDailyMetric({ date: entryDate, type: type, value: num });
     setValue('');
     notify("Dados salvos com sucesso!", "success");
-    await load();
+    await load(true);
   };
 
   const processChartData = () => {
@@ -217,11 +224,12 @@ export const DataMetricScreen: React.FC<DataMetricScreenProps> = ({ type }) => {
       const date = parseLocalDay((d as any).date);
       const shortDate = date.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
       const rawValue = type === 'milk' ? (d as DailyMilk).liters : (d as DailyMetric).value;
-      const value = vizMode === 'accumulated' ? (accumulatedByDate[(d as any).date] ?? rawValue) : rawValue;
+      const displayValue = vizMode === 'accumulated' ? (accumulatedByDate[(d as any).date] ?? rawValue) : rawValue;
       return {
         date: shortDate,
         fullDate: (d as any).date,
-        value: value,
+        value: displayValue,
+        rawValue: rawValue,
         label: conf.title
       };
     }).sort((a, b) => parseLocalDay(b.fullDate).getTime() - parseLocalDay(a.fullDate).getTime());
@@ -229,9 +237,34 @@ export const DataMetricScreen: React.FC<DataMetricScreenProps> = ({ type }) => {
 
   const dailyList = getDailyListData();
 
+  const exportCSV = () => {
+    try {
+      const sorted = [...history].sort((a: any, b: any) => a.date > b.date ? 1 : -1);
+      const rows = [
+        ['Data', conf.label, 'Unidade'],
+        ...sorted.map((d: any) => {
+          const val = type === 'milk' ? d.liters : d.value;
+          return [d.date, String(val ?? ''), conf.unit];
+        })
+      ];
+      const csv = rows.map(r => r.join(';')).join('\n');
+      const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${conf.title.toLowerCase().replace(/\s+/g, '_')}_${selectedMonth}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+      notify('CSV exportado com sucesso!', 'success');
+    } catch (e) {
+      console.error('Erro ao exportar CSV:', e);
+      notify('Erro ao exportar CSV.', 'error');
+    }
+  };
+
   const openEdit = (item: any) => {
     setEditingEntry(item);
-    setEditValue(String(item?.value ?? ''));
+    setEditValue(String(item?.rawValue ?? item?.value ?? ''));
   };
 
   const confirmDelete = async (item: any) => {
@@ -246,7 +279,7 @@ export const DataMetricScreen: React.FC<DataMetricScreenProps> = ({ type }) => {
           await db.deleteDailyMetric(item.fullDate, type);
         }
         notify('Registro excluído.', 'success');
-        await load();
+        await load(true);
       } catch (e) {
         console.error(e);
         notify('Erro ao excluir.', 'error');
@@ -271,7 +304,7 @@ export const DataMetricScreen: React.FC<DataMetricScreenProps> = ({ type }) => {
         }
         setEditingEntry(null);
         notify('Registro atualizado!', 'success');
-        await load();
+        await load(true);
       } catch (e) {
         console.error(e);
         notify('Erro ao atualizar.', 'error');
@@ -438,6 +471,13 @@ export const DataMetricScreen: React.FC<DataMetricScreenProps> = ({ type }) => {
            </div>
         </div>
 
+        {/* Indicador de carregamento */}
+        {isLoading && (
+          <div className="bg-blue-50 border-b border-blue-100 px-4 py-2 text-center text-xs font-bold text-blue-500">
+            Atualizando dados...
+          </div>
+        )}
+
         {/* Filtro de Mês e Toggle Diário/Acumulado (Fixo) */}
         <div className="sticky top-0 z-20 bg-white border-b-2 border-gray-200 p-4 flex flex-col sm:flex-row items-center justify-between gap-4 shadow-sm">
             {/* Seletor de Mês - Botão que abre modal */}
@@ -487,6 +527,16 @@ export const DataMetricScreen: React.FC<DataMetricScreenProps> = ({ type }) => {
                   <Calendar size={16} className="text-blue-600"/>
                   <span>Registros Diários ({selectedMonth})</span>
                 </div>
+                {history.length > 0 && (
+                  <button
+                    onClick={exportCSV}
+                    title="Exportar todos os dados como CSV"
+                    className="flex items-center gap-1 px-3 py-1 bg-green-50 border border-green-300 text-green-700 text-xs font-bold rounded-lg hover:bg-green-100 transition active:scale-95"
+                  >
+                    <Download size={13} />
+                    CSV
+                  </button>
+                )}
             </h4>
             {dailyList.length === 0 ? (
                 <div className="text-center py-8 text-gray-400">
@@ -582,21 +632,29 @@ export const DataMetricScreen: React.FC<DataMetricScreenProps> = ({ type }) => {
               </div>
 
               {/* Navegação de Anos */}
-              <div className="flex items-center justify-between gap-2 pt-4 border-t border-gray-200">
-                <button
-                  onClick={() => setMonthPickerYear(monthPickerYear - 1)}
-                  className="px-4 py-2 bg-gray-100 text-gray-700 font-bold rounded-lg hover:bg-gray-200 transition"
-                >
-                  ← Anterior
-                </button>
-                <span className="font-black text-gray-800">{monthPickerYear}</span>
-                <button
-                  onClick={() => setMonthPickerYear(monthPickerYear + 1)}
-                  className="px-4 py-2 bg-gray-100 text-gray-700 font-bold rounded-lg hover:bg-gray-200 transition"
-                >
-                  Próximo →
-                </button>
-              </div>
+              {(() => {
+                const minYear = 2020;
+                const maxYear = new Date().getFullYear() + 1;
+                return (
+                  <div className="flex items-center justify-between gap-2 pt-4 border-t border-gray-200">
+                    <button
+                      onClick={() => setMonthPickerYear(Math.max(minYear, monthPickerYear - 1))}
+                      disabled={monthPickerYear <= minYear}
+                      className="px-4 py-2 bg-gray-100 text-gray-700 font-bold rounded-lg hover:bg-gray-200 transition disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      ← Anterior
+                    </button>
+                    <span className="font-black text-gray-800">{monthPickerYear}</span>
+                    <button
+                      onClick={() => setMonthPickerYear(Math.min(maxYear, monthPickerYear + 1))}
+                      disabled={monthPickerYear >= maxYear}
+                      className="px-4 py-2 bg-gray-100 text-gray-700 font-bold rounded-lg hover:bg-gray-200 transition disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      Próximo →
+                    </button>
+                  </div>
+                );
+              })()}
             </div>
 
             <div className="p-4 border-t border-gray-200 bg-gray-50 flex gap-2">

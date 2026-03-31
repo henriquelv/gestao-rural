@@ -44,6 +44,16 @@ const getTimestampFieldForTable = (tableName: string): string | null => {
 const MEDIA_BUCKET = 'media';
 const tablesWithMedia = new Set(['anomalies', 'instructions', 'notices', 'improvements', 'farm_docs']);
 
+// Cache de URLs públicas de mídia: evita recalcular a URL a cada sync/leitura
+const _mediaUrlCache = new Map<string, string>();
+const getCachedPublicUrl = (remotePath: string): string => {
+  if (_mediaUrlCache.has(remotePath)) return _mediaUrlCache.get(remotePath)!;
+  const { data } = supabase.storage.from(MEDIA_BUCKET).getPublicUrl(remotePath);
+  const url = data?.publicUrl || '';
+  if (url) _mediaUrlCache.set(remotePath, url);
+  return url;
+};
+
 const normalizeRemoteUrls = (tableName: string, row: any) => {
   try {
     if (!tablesWithMedia.has(tableName)) return row;
@@ -52,8 +62,7 @@ const normalizeRemoteUrls = (tableName: string, row: any) => {
     if (tableName === 'farm_docs') {
       const m = row?.media;
       if (m && !m.remoteUrl && m.remotePath) {
-        const { data } = supabase.storage.from(MEDIA_BUCKET).getPublicUrl(m.remotePath);
-        return { ...row, media: { ...m, remoteUrl: data?.publicUrl || m.remoteUrl } };
+        return { ...row, media: { ...m, remoteUrl: getCachedPublicUrl(m.remotePath) } };
       }
       return row;
     }
@@ -62,8 +71,7 @@ const normalizeRemoteUrls = (tableName: string, row: any) => {
     if (arr.length === 0) return row;
     const next = arr.map((m: any) => {
       if (m && !m.remoteUrl && m.remotePath) {
-        const { data } = supabase.storage.from(MEDIA_BUCKET).getPublicUrl(m.remotePath);
-        return { ...m, remoteUrl: data?.publicUrl || m.remoteUrl };
+        return { ...m, remoteUrl: getCachedPublicUrl(m.remotePath) };
       }
       return m;
     });
@@ -207,6 +215,24 @@ async function refreshFromServer(tableName: string): Promise<void> {
     updated_at: nowISO(),
     synced: true
   }));
+
+  // Detecção de conflito: se um registro local não sincronizado (edição offline)
+  // for sobrescrito por dados do servidor, avisa o usuário.
+  try {
+    const conflictTables = new Set(['daily_metrics', 'milk_daily', 'anomalies']);
+    if (conflictTables.has(tableName)) {
+      for (const record of records) {
+        const local = await localdb.getById<any>(tableName, record.id);
+        if (local && (local as any).synced === false) {
+          console.warn(`Conflito detectado em ${tableName}/${record.id}: dado local não sincronizado será sobrescrito pelo servidor.`);
+          notify(`Atenção: dado de "${tableName === 'daily_metrics' ? 'métricas' : tableName === 'milk_daily' ? 'leite' : 'anomalia'}" foi atualizado por outro dispositivo.`, 'info');
+          break; // Uma notificação por tabela é suficiente
+        }
+      }
+    }
+  } catch {
+    // Não bloquear sync por erro na detecção de conflito
+  }
 
   await localdb.bulkPut(tableName, records);
 

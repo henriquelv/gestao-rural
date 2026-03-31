@@ -160,8 +160,10 @@ const App: React.FC = () => {
           localStorage.setItem(METRICS_SYNC_RESET_FLAG, 'true');
         }
 
+        window.dispatchEvent(new CustomEvent('app-sync-start', { detail: { label: 'dados do servidor' } }));
         await db.refreshFromServer();
         await db.migrateRaspagemToConforto();
+        window.dispatchEvent(new CustomEvent('app-sync-start', { detail: { label: 'enviando pendentes' } }));
         await db.syncPendingData();
         await seedImageData();
       } catch (error) {
