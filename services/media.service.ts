@@ -423,7 +423,11 @@ export const mediaService = {
     if (index[cacheKey]) return true; // já cacheado
 
     try {
-      const resp = await fetch(remoteUrl);
+      // Timeout de 30s para não travar se a conexão cair no meio
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 30000);
+      const resp = await fetch(remoteUrl, { signal: controller.signal });
+      clearTimeout(timeout);
       if (!resp.ok) return false;
       const blob = await resp.blob();
 

@@ -169,9 +169,6 @@ const App: React.FC = () => {
         window.dispatchEvent(new CustomEvent('app-sync-start', { detail: { label: 'enviando pendentes' } }));
         await db.syncPendingData();
         await seedImageData();
-        // Pre-cache de mídia remota para uso offline
-        window.dispatchEvent(new CustomEvent('app-sync-start', { detail: { label: 'salvando mídias offline' } }));
-        await db.preCacheAllMedia();
       } catch (error) {
         console.error('Erro durante sync cycle:', error);
       } finally {
@@ -180,12 +177,28 @@ const App: React.FC = () => {
       }
     };
 
-    void runSyncCycle();
+    // Cache de mídia roda SEPARADO do sync — não bloqueia dados.
+    // Roda apenas uma vez por sessão (startup + quando internet volta).
+    let mediaCacheDone = false;
+    const runMediaCacheIfNeeded = async () => {
+      if (mediaCacheDone || !navigator.onLine) return;
+      mediaCacheDone = true;
+      try {
+        await db.preCacheAllMedia();
+      } catch (e) {
+        console.error('Erro no cache de mídia:', e);
+        mediaCacheDone = false; // permitir retry na próxima vez
+      }
+    };
+
+    // Startup: sync de dados primeiro, depois cache de mídia em paralelo
+    runSyncCycle().then(runMediaCacheIfNeeded).catch(console.error);
 
     // Listener para quando a internet volta
     const handleOnline = () => {
       notify("Conexão restabelecida! Iniciando sincronização...", "info");
-      void runSyncCycle();
+      mediaCacheDone = false; // permitir novo cache quando internet volta
+      runSyncCycle().then(runMediaCacheIfNeeded).catch(console.error);
     };
 
     window.addEventListener('online', handleOnline);

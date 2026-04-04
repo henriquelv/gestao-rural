@@ -434,6 +434,7 @@ async function preCacheAllMedia(): Promise<void> {
           : (Array.isArray(record.media) ? record.media : []);
 
         for (const m of items) {
+          if (!isOnline()) return; // parar se caiu a internet
           if (!m || (!m.remotePath && !m.remoteUrl)) continue;
           if (mediaService.isOfflineCached(m)) { skipped++; continue; }
 
