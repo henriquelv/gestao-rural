@@ -417,10 +417,46 @@ async function recoverOrphanedRecords(): Promise<void> {
   }
 }
 
+// Pre-cache de mídia remota: baixa em background todas as imagens/vídeos
+// que vieram de outros dispositivos para que fiquem disponíveis offline.
+async function preCacheAllMedia(): Promise<void> {
+  if (!isOnline()) return;
+  const tablesWithMedia = ['anomalies', 'instructions', 'notices', 'improvements', 'farm_docs'];
+  let cached = 0;
+  let skipped = 0;
+
+  for (const tableName of tablesWithMedia) {
+    try {
+      const records = await localdb.getAll<any>(tableName);
+      for (const record of records) {
+        const items: any[] = tableName === 'farm_docs'
+          ? (record.media ? [record.media] : [])
+          : (Array.isArray(record.media) ? record.media : []);
+
+        for (const m of items) {
+          if (!m || (!m.remotePath && !m.remoteUrl)) continue;
+          if (mediaService.isOfflineCached(m)) { skipped++; continue; }
+
+          const ok = await mediaService.cacheRemoteItem(m);
+          if (ok) cached++;
+        }
+      }
+    } catch (e) {
+      console.error(`[MediaCache] Erro ao cachear ${tableName}:`, e);
+    }
+  }
+
+  if (cached > 0) {
+    console.log(`[MediaCache] ${cached} mídias cacheadas, ${skipped} já existiam`);
+    notify(`${cached} mídia(s) salva(s) para uso offline.`, 'info');
+  }
+}
+
 export const db = {
   syncPendingData: () => syncService.syncAll(),
   migrateRaspagemToConforto,
   recoverOrphanedRecords,
+  preCacheAllMedia,
 
   getSyncStatus: async () => {
     try {

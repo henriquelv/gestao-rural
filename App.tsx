@@ -169,6 +169,9 @@ const App: React.FC = () => {
         window.dispatchEvent(new CustomEvent('app-sync-start', { detail: { label: 'enviando pendentes' } }));
         await db.syncPendingData();
         await seedImageData();
+        // Pre-cache de mídia remota para uso offline
+        window.dispatchEvent(new CustomEvent('app-sync-start', { detail: { label: 'salvando mídias offline' } }));
+        await db.preCacheAllMedia();
       } catch (error) {
         console.error('Erro durante sync cycle:', error);
       } finally {
