@@ -87,6 +87,7 @@ export const setSectorColorOverrides = (next: Partial<Record<SectorType, string>
   try {
     localStorage.setItem(overridesKey, JSON.stringify(next));
   } catch {
+    // ignore
   }
 };
 

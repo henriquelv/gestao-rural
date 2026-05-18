@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { Layout } from '../components/Layout';
 import { BigButton } from '../components/BigButton';
 import { db } from '../services/db.service';
+import { Cloud, CloudOff, RefreshCw, AlertCircle } from 'lucide-react';
 import { FarmSettings, UIConfig } from '../types';
 
 
@@ -15,13 +16,37 @@ export const HomeScreen: React.FC = () => {
   const navigate = useNavigate();
   const [settings, setSettings] = useState<FarmSettings | null>(null);
   const [ui, setUi] = useState<UIConfig | null>(null);
+  const [syncStatus, setSyncStatus] = useState<{ pending: number; errors: number; isRunning: boolean }>({ pending: 0, errors: 0, isRunning: false });
 
   useEffect(() => {
     // Carrega dados
     db.getSettings().then(setSettings);
     db.getUIConfig().then(setUi);
+
+    const updateStatus = async () => {
+      const s = await db.getSyncStatus();
+      setSyncStatus(prev => ({ ...prev, pending: s.pendingCount, errors: s.errorCount }));
+    };
+
+    updateStatus();
+    const inv = setInterval(updateStatus, 5000); // Check every 5s
+
+    const onStart = () => setSyncStatus(prev => ({ ...prev, isRunning: true }));
+    const onEnd = () => {
+      setSyncStatus(prev => ({ ...prev, isRunning: false }));
+      updateStatus();
+    };
+
+    window.addEventListener('app-sync-start', onStart);
+    window.addEventListener('app-sync-end', onEnd);
+
+    return () => {
+      clearInterval(inv);
+      window.removeEventListener('app-sync-start', onStart);
+      window.removeEventListener('app-sync-end', onEnd);
+    };
   }, []);
-  
+
   if (!ui) return null;
 
   // Filter and Sort Buttons for Home Screen
@@ -31,9 +56,9 @@ export const HomeScreen: React.FC = () => {
 
   const handleNavigate = (route: string) => {
     if (route.startsWith('/')) {
-        navigate(route);
+      navigate(route);
     } else {
-        console.warn("Rota inválida:", route);
+      console.warn("Rota inválida:", route);
     }
   };
 
@@ -44,26 +69,48 @@ export const HomeScreen: React.FC = () => {
 
       {/* Header Area Limpo: Apenas Logo MDA e Logo Fazenda (Opcional) */}
       <div className="pt-4 px-6 pb-2 flex items-center justify-between z-10 relative">
-          {/* Logo Sistema MDA */}
-          <img 
+        {/* Logo Sistema MDA */}
+        <div className="flex items-center gap-3">
+          <img
             src={MDA_LOGO_SVG}
-            className="h-12 w-auto object-contain drop-shadow-sm"
+            className="h-10 w-auto object-contain drop-shadow-sm"
             alt="Sistema MDA"
           />
-          
-          {/* Logo da Fazenda (Canto Direito - Opcional) */}
-          {settings?.farmLogoUri && (
-             <div className="h-14 w-14 rounded-full border-4 border-white shadow-md overflow-hidden bg-white">
-                 <img
-                   src={settings.farmLogoUri}
-                   className="h-full w-full object-cover"
-                   alt="Logo Fazenda"
-                   onError={(e) => {
-                     (e.currentTarget as HTMLImageElement).style.display = 'none';
-                   }}
-                 />
-             </div>
-          )}
+
+          {/* Sync Status Badge */}
+          <div
+            onClick={() => syncStatus.errors > 0 && navigate('/settings')}
+            className={`flex items-center gap-1.5 px-2 py-1 rounded-full text-[10px] font-bold border transition-colors ${syncStatus.isRunning ? 'bg-blue-50 text-blue-600 border-blue-200' :
+                syncStatus.errors > 0 ? 'bg-red-50 text-red-600 border-red-200 animate-pulse cursor-pointer' :
+                  syncStatus.pending > 0 ? 'bg-amber-50 text-amber-600 border-amber-200' :
+                    'bg-green-50 text-green-600 border-green-200'
+              }`}
+          >
+            {syncStatus.isRunning ? <RefreshCw size={10} className="animate-spin" /> :
+              syncStatus.errors > 0 ? <AlertCircle size={10} /> :
+                syncStatus.pending > 0 ? <CloudOff size={10} /> :
+                  <Cloud size={10} />}
+
+            {syncStatus.isRunning ? 'SINCRONIZANDO' :
+              syncStatus.errors > 0 ? `${syncStatus.errors} ERROS` :
+                syncStatus.pending > 0 ? `${syncStatus.pending} PENDENTES` :
+                  'SINCRONIZADO'}
+          </div>
+        </div>
+
+        {/* Logo da Fazenda (Canto Direito - Opcional) */}
+        {settings?.farmLogoUri && (
+          <div className="h-14 w-14 rounded-full border-4 border-white shadow-md overflow-hidden bg-white">
+            <img
+              src={settings.farmLogoUri}
+              className="h-full w-full object-cover"
+              alt="Logo Fazenda"
+              onError={(e) => {
+                (e.currentTarget as HTMLImageElement).style.display = 'none';
+              }}
+            />
+          </div>
+        )}
       </div>
 
       {/* Grid Content */}
@@ -72,19 +119,21 @@ export const HomeScreen: React.FC = () => {
         {/* Grid de Botões */}
         <div className="grid grid-cols-2 gap-3 content-start">
           {homeButtons.map(btn => (
-              <div key={btn.id} className={btn.id === 'h7' || btn.route === '/settings' ? 'col-span-2' : ''}>
-                  <BigButton 
-                      icon={btn.iconValue}
-                      iconType={btn.iconType} 
-                      label={btn.label} 
-                      color={btn.color}
-                      onClick={() => handleNavigate(btn.route)}
-                      fullWidth={btn.id === 'h7' || btn.route === '/settings'} 
-                  />
-              </div>
+            <div key={btn.id} className={btn.id === 'h7' || btn.route === '/settings' ? 'col-span-2' : ''}>
+              <BigButton
+                icon={btn.iconValue}
+                iconType={btn.iconType}
+                label={btn.label}
+                color={btn.color}
+                onClick={() => handleNavigate(btn.route)}
+                fullWidth={btn.id === 'h7' || btn.route === '/settings'}
+              />
+            </div>
           ))}
         </div>
       </div>
     </Layout>
   );
 };
+
+export default HomeScreen;

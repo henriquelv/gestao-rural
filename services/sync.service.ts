@@ -2,6 +2,7 @@ import { localdb } from './localdb';
 import { supabase } from './supabase';
 import { notify } from './notification.service';
 import { mediaService } from './media.service';
+import { db } from './db.service';
 import { MediaItem } from '../types';
 
 const guessExt = (m: MediaItem) => {
@@ -20,30 +21,42 @@ const guessExt = (m: MediaItem) => {
 };
 
 export const syncService = {
+  _isSyncing: false,
+
   async syncAll(): Promise<{ ok: boolean; count: number }> {
+    if (this._isSyncing) {
+      console.log('Sincronização já em andamento, pulando...');
+      return { ok: true, count: 0 };
+    }
+
     if (!navigator.onLine) return { ok: false, count: 0 };
 
     const pendingItems = await localdb.getPendingOutbox();
     if (pendingItems.length === 0) return { ok: true, count: 0 };
 
+    this._isSyncing = true;
     let successCount = 0;
     let failCount = 0;
 
-    for (const item of pendingItems) {
-      try {
-        const updatedPayload = await this.uploadPendingMedia(item.payload, item.tableName);
-        await this.processItem({ ...item, payload: updatedPayload });
+    try {
+      for (const item of pendingItems) {
+        try {
+          const updatedPayload = await this.uploadPendingMedia(item.payload, item.tableName);
+          await this.processItem({ ...item, payload: updatedPayload });
 
-        successCount++;
-        if (item.id) await localdb.deleteOutboxItem(item.id);
-        await this.markAsSynced(item.tableName, updatedPayload);
-      } catch (error: any) {
-        console.error(`Erro sync item ${item.id}:`, error);
-        failCount++;
-        if (item.id) {
-          await localdb.markOutboxError(item.id, error.message || 'Erro desconhecido');
+          successCount++;
+          if (item.id) await localdb.deleteOutboxItem(item.id);
+          await this.markAsSynced(item.tableName, updatedPayload);
+        } catch (error: any) {
+          console.error(`Erro sync item ${item.id}:`, error);
+          failCount++;
+          if (item.id) {
+            await localdb.markOutboxError(item.id, error.message || 'Erro desconhecido');
+          }
         }
       }
+    } finally {
+      this._isSyncing = false;
     }
 
     if (successCount > 0) notify(`${successCount} itens sincronizados.`, 'success');
@@ -222,8 +235,9 @@ export const syncService = {
 
       for (const table of tables) {
         try {
-          const data = (await (localdb as any)[`get${table.charAt(0).toUpperCase() + table.slice(1)}`]?.()) || [];
-          
+          const capitalized = table.charAt(0).toUpperCase() + table.slice(1);
+          const data = (await (db as any)[`get${capitalized}`]?.()) || [];
+
           // Valida se os objetos têm propriedades básicas
           for (const item of data) {
             if (!item.id || typeof item.id !== 'string') {

@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import { User, MapPin, Clock, FileText, CheckCircle, ZoomIn, Play, X, Volume2, Download, Presentation, Eye, Check } from 'lucide-react';
 import { Layout } from '../components/Layout';
 import { Header } from '../components/Header';
@@ -10,23 +10,28 @@ import { notify } from '../services/notification.service';
 import { ai, Modality } from "../services/ai";
 import { mediaService } from '../services/media.service';
 import { useImageZoom } from '../utils/useImageZoom';
+import { PinRequestModal } from '../components/PinRequestModal';
+import { authService } from '../services/auth.service';
+import { Trash2 } from 'lucide-react';
 
 export const AnomalyDetailScreen: React.FC = () => {
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
   const [anomaly, setAnomaly] = useState<Anomaly | null>(null);
   const [mediaUrls, setMediaUrls] = useState<Record<string, string>>({});
-  const [employees, setEmployees] = useState<{id:string, name:string}[]>([]);
-  
+  const [employees, setEmployees] = useState<{ id: string, name: string }[]>([]);
+
   const [lightboxMedia, setLightboxMedia] = useState<MediaItem | null>(null);
   const [lightboxUrl, setLightboxUrl] = useState<string>('');
-  const [lightboxZoom, setLightboxZoom] = useState(1);
   const [isPlayingTTS, setIsPlayingTTS] = useState(false);
   const [showResolveModal, setShowResolveModal] = useState(false);
+  const [showPinModal, setShowPinModal] = useState(false);
+  const [pendingAction, setPendingAction] = useState<(() => Promise<void> | void) | null>(null);
   const [resolvedByName, setResolvedByName] = useState('');
   const audioContextRef = useRef<AudioContext | null>(null);
 
   // Gestos de zoom para lightbox
-  const lightboxZoomGestures = useImageZoom((newZoom) => setLightboxZoom(newZoom));
+  const lightboxZoomGestures = useImageZoom();
 
   useEffect(() => {
     let mounted = true;
@@ -34,7 +39,7 @@ export const AnomalyDetailScreen: React.FC = () => {
       if (!id) return;
       const a = await db.getAnomalyById(id);
       if (a && mounted) setAnomaly(a);
-      
+
       // Carregar lista de funcionários
       const emps = await db.getEmployees();
       emps.sort((a, b) => a.name.localeCompare(b.name));
@@ -90,7 +95,7 @@ export const AnomalyDetailScreen: React.FC = () => {
     if (!anomaly || isPlayingTTS) return;
     setIsPlayingTTS(true);
     try {
-          const textToSay = `Setor ${anomaly.sector}. Responsável: ${anomaly.responsible}. ${anomaly.description}`;
+      const textToSay = `Setor ${anomaly.sector}. Responsável: ${anomaly.responsible}. ${anomaly.description}`;
       const response = await ai.models.generateContent({
         model: "gemini-2.5-flash-preview-tts",
         contents: [{ parts: [{ text: textToSay }] }],
@@ -103,7 +108,7 @@ export const AnomalyDetailScreen: React.FC = () => {
         const bytes = new Uint8Array(len);
         for (let i = 0; i < len; i++) bytes[i] = binaryString.charCodeAt(i);
         if (!audioContextRef.current || audioContextRef.current.state === 'closed') {
-            audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({sampleRate: 24000});
+          audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
         }
         const ctx = audioContextRef.current;
         const dataInt16 = new Int16Array(bytes.buffer);
@@ -137,22 +142,38 @@ export const AnomalyDetailScreen: React.FC = () => {
         resolvedAt: new Date().toISOString(),
         resolvedBy: resolvedByName
       };
-      
+
       await db.updateAnomaly(updatedAnomaly);
-      
+
       // Feedback diferente se offline ou online
       if (navigator.onLine) {
         notify('Anomalia marcada como resolvida e sincronizada!', 'success');
       } else {
         notify('Anomalia marcada como resolvida. Será sincronizada quando voltar online.', 'info');
       }
-      
+
       setShowResolveModal(false);
       setResolvedByName('');
       setAnomaly(updatedAnomaly);
     } catch (e) {
       notify('Erro ao resolver anomalia.', 'error');
     }
+  };
+
+  const handleDelete = async () => {
+    const action = async () => {
+      if (!id) return;
+      try {
+        await db.deleteAnomaly(id);
+        notify('Anomalia excluída com sucesso!', 'success');
+        navigate('/anomalies/list');
+      } catch (e) {
+        notify('Erro ao excluir anomalia.', 'error');
+      }
+    };
+
+    setPendingAction(() => action);
+    setShowPinModal(true);
   };
 
   if (!anomaly) return <Layout><div className="p-10 text-center">Carregando...</div></Layout>;
@@ -173,7 +194,7 @@ export const AnomalyDetailScreen: React.FC = () => {
     <Layout>
       <Header title="Detalhes" targetRoute="/anomalies/list" />
       <div className="flex-1 overflow-y-auto p-4 space-y-6 bg-gray-50 pb-24">
-        
+
         {/* Status de Resolução */}
         {anomaly.resolvedAt && (
           <div className="bg-green-50 p-5 rounded-xl shadow-sm border-2 border-green-300">
@@ -182,12 +203,12 @@ export const AnomalyDetailScreen: React.FC = () => {
               <h3 className="text-lg font-bold text-green-800">Anomalia Resolvida</h3>
             </div>
             <p className="text-sm text-green-700 ml-9">
-              Por: <span className="font-bold">{anomaly.resolvedBy}</span><br/>
+              Por: <span className="font-bold">{anomaly.resolvedBy}</span><br />
               Em: {new Date(anomaly.resolvedAt).toLocaleString('pt-BR')}
             </p>
           </div>
         )}
-        
+
         <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-200 space-y-4">
           <div className="flex items-center text-gray-500 font-medium">
             <Clock size={20} className="mr-3 text-blue-500" />
@@ -220,64 +241,92 @@ export const AnomalyDetailScreen: React.FC = () => {
 
         {/* VISUAL MEDIA GRID */}
         {visualMedia.length > 0 && (
-            <div className="space-y-3">
-                <h3 className="text-lg font-bold text-gray-600 ml-1">Evidências Visuais</h3>
-                <div className="grid grid-cols-2 gap-3">
-                {visualMedia.map(m => (
-                    <div key={m.id} className="relative rounded-xl overflow-hidden shadow-md bg-gray-900 aspect-square group" onClick={() => openMedia(m)}>
-                    {m.type === 'photo' && (
-                      <img
-                        src={mediaUrl(m)}
-                        className="w-full h-full object-cover opacity-90 group-hover:opacity-100"
-                        onError={(e) => {
-                          const next = bestFallbackUrl(m);
-                          if (next && (e.currentTarget as HTMLImageElement).src !== next) {
-                            (e.currentTarget as HTMLImageElement).src = next;
-                          }
-                        }}
-                      />
-                    )}
-                    {m.type === 'video' && <div className="w-full h-full flex items-center justify-center relative bg-black"><Play fill="white" className="absolute text-white drop-shadow-lg" size={40} /></div>}
-                    <div className="absolute bottom-2 right-2 bg-black/50 text-white p-1 rounded-full"><ZoomIn size={16} /></div>
-                    </div>
-                ))}
+          <div className="space-y-3">
+            <h3 className="text-lg font-bold text-gray-600 ml-1">Evidências Visuais</h3>
+            <div className="grid grid-cols-2 gap-3">
+              {visualMedia.map(m => (
+                <div key={m.id} className="relative rounded-xl overflow-hidden shadow-md bg-gray-900 aspect-square group" onClick={() => openMedia(m)}>
+                  {m.type === 'photo' && (
+                    <img
+                      src={mediaUrl(m)}
+                      className="w-full h-full object-cover opacity-90 group-hover:opacity-100"
+                      onError={(e) => {
+                        const next = bestFallbackUrl(m);
+                        if (next && (e.currentTarget as HTMLImageElement).src !== next) {
+                          (e.currentTarget as HTMLImageElement).src = next;
+                        }
+                      }}
+                    />
+                  )}
+                  {m.type === 'video' && <div className="w-full h-full flex items-center justify-center relative bg-black"><Play fill="white" className="absolute text-white drop-shadow-lg" size={40} /></div>}
+                  <div className="absolute bottom-2 right-2 bg-black/50 text-white p-1 rounded-full"><ZoomIn size={16} /></div>
                 </div>
+              ))}
             </div>
+          </div>
         )}
 
         {/* DOCUMENT LIST */}
         {docMedia.length > 0 && (
-            <div className="space-y-3">
-                <h3 className="text-lg font-bold text-gray-600 ml-1">Documentos Anexados</h3>
-                <div className="space-y-2">
-                    {docMedia.map(m => (
-                        <div key={m.id} onClick={() => openMedia(m)} className="flex items-center gap-3 p-4 bg-white rounded-xl shadow-sm border border-gray-200 active:bg-blue-50 cursor-pointer">
-                            {m.type === 'pdf' ? <FileText size={24} className="text-red-500" /> :
-                             m.type === 'ppt' ? <Presentation size={24} className="text-orange-500" /> :
-                             <FileText size={24} className="text-blue-600" />}
-                            
-                            <div className="flex-1 overflow-hidden">
-                                <p className="font-bold text-gray-800 text-sm truncate">{m.name || 'Documento sem nome'}</p>
-                                <p className="text-[10px] text-gray-400 uppercase">{m.type}</p>
-                            </div>
-                            {m.type === 'pdf' ? <Eye size={20} className="text-blue-500"/> : <Download size={20} className="text-gray-400"/>}
-                        </div>
-                    ))}
+          <div className="space-y-3">
+            <h3 className="text-lg font-bold text-gray-600 ml-1">Documentos Anexados</h3>
+            <div className="space-y-2">
+              {docMedia.map(m => (
+                <div key={m.id} onClick={() => openMedia(m)} className="flex items-center gap-3 p-4 bg-white rounded-xl shadow-sm border border-gray-200 active:bg-blue-50 cursor-pointer">
+                  {m.type === 'pdf' ? <FileText size={24} className="text-red-500" /> :
+                    m.type === 'ppt' ? <Presentation size={24} className="text-orange-500" /> :
+                      <FileText size={24} className="text-blue-600" />}
+
+                  <div className="flex-1 overflow-hidden">
+                    <p className="font-bold text-gray-800 text-sm truncate">{m.name || 'Documento sem nome'}</p>
+                    <p className="text-[10px] text-gray-400 uppercase">{m.type}</p>
+                  </div>
+                  {m.type === 'pdf' ? <Eye size={20} className="text-blue-500" /> : <Download size={20} className="text-gray-400" />}
                 </div>
+              ))}
             </div>
+          </div>
         )}
 
-        {/* Botão de Resolver */}
-        {!anomaly.resolvedAt && (
+        {/* Ações */}
+        <div className="flex gap-3 sticky bottom-4">
+          {!anomaly.resolvedAt && (
+            <button
+              onClick={() => setShowResolveModal(true)}
+              className="flex-1 py-4 bg-green-600 text-white font-black text-lg rounded-2xl shadow-lg flex items-center justify-center gap-2 hover:bg-green-700 active:scale-95 transition-all"
+            >
+              <CheckCircle size={24} />
+              RESOLVER
+            </button>
+          )}
+
           <button
-            onClick={() => setShowResolveModal(true)}
-            className="w-full py-4 bg-green-600 text-white font-bold text-lg rounded-xl shadow-lg flex items-center justify-center gap-2 hover:bg-green-700 active:bg-green-800 transition-colors sticky bottom-4"
+            onClick={handleDelete}
+            className={`py-4 px-6 bg-white text-red-500 font-bold rounded-2xl shadow-lg flex items-center justify-center gap-2 border-2 border-red-100 hover:bg-red-50 active:scale-95 transition-all ${anomaly.resolvedAt ? 'flex-1' : ''}`}
           >
-            <Check size={24} />
-            MARCAR COMO RESOLVIDA
+            <Trash2 size={24} />
+            {anomaly.resolvedAt ? 'EXCLUIR REGISTRO' : ''}
           </button>
-        )}
+        </div>
       </div>
+
+      {showPinModal && (
+        <PinRequestModal
+          title="Excluir Anomalia?"
+          description="Tem certeza que deseja excluir esta anomalia? Ela não poderá ser recuperada. Digite o PIN."
+          onSuccess={() => {
+            setShowPinModal(false);
+            if (pendingAction) {
+              void pendingAction();
+              setPendingAction(null);
+            }
+          }}
+          onClose={() => {
+            setShowPinModal(false);
+            setPendingAction(null);
+          }}
+        />
+      )}
 
       {/* Modal de Resolução */}
       {showResolveModal && (
@@ -326,70 +375,53 @@ export const AnomalyDetailScreen: React.FC = () => {
       {lightboxMedia && (
         <div className="fixed inset-0 z-[60] bg-black flex flex-col justify-center items-center animate-in fade-in duration-200">
           <div className="absolute top-0 left-0 w-full h-16 bg-black/50 flex justify-between items-center px-4 z-50">
-             <span className="text-white font-bold">Visualizador</span>
-             <div className="flex items-center gap-2">
-               {lightboxMedia.type === 'photo' && (
-                 <div className="flex items-center gap-2">
-                   <button
-                     onClick={() => setLightboxZoom(Math.max(1, lightboxZoom - 0.25))}
-                     className="text-white p-2 bg-white/10 rounded-full hover:bg-white/20"
-                   >
-                     −
-                   </button>
-                   <span className="text-white text-sm font-bold w-12 text-center">{Math.round(lightboxZoom * 100)}%</span>
-                   <button
-                     onClick={() => setLightboxZoom(Math.min(3, lightboxZoom + 0.25))}
-                     className="text-white p-2 bg-white/10 rounded-full hover:bg-white/20"
-                   >
-                     +
-                   </button>
-                 </div>
-               )}
-               <button onClick={() => { setLightboxMedia(null); setLightboxUrl(''); setLightboxZoom(1); }} className="text-white p-2 bg-white/10 rounded-full hover:bg-white/20"><X size={24} /></button>
-             </div>
+            <span className="text-white font-bold">Visualizador</span>
+            <div className="flex items-center gap-2">
+              <button onClick={() => { setLightboxMedia(null); setLightboxUrl(''); }} className="text-white p-2 bg-white/10 rounded-full hover:bg-white/20"><X size={24} /></button>
+            </div>
           </div>
-          
+
           <div className="w-full h-full flex items-center justify-center p-2 overflow-auto">
-             {lightboxMedia.type === 'photo' && (
-               <img
-                 src={lightboxUrl || mediaUrl(lightboxMedia)}
-                 className="object-contain select-none touch-none"
-                 style={{ transform: `scale(${lightboxZoom})`, maxWidth: '100%', maxHeight: '90vh' }}
-                 onTouchStart={lightboxZoomGestures.handleTouchStart}
-                 onTouchMove={lightboxZoomGestures.handleTouchMove}
-                 onTouchEnd={lightboxZoomGestures.handleTouchEnd}
-                 onError={(e) => {
-                   const next = bestFallbackUrl(lightboxMedia);
-                   if (next && (e.currentTarget as HTMLImageElement).src !== next) {
-                     (e.currentTarget as HTMLImageElement).src = next;
-                   }
-                 }}
-               />
-             )}
-             {lightboxMedia.type === 'video' && (
-               <video
-                 src={lightboxUrl || mediaUrl(lightboxMedia)}
-                 controls
-                 autoPlay
-                 playsInline
-                 className="max-w-full max-h-[80vh] w-full"
-                 onError={(e) => {
-                   const next = bestFallbackUrl(lightboxMedia);
-                   const el = e.currentTarget as HTMLVideoElement;
-                   if (next && el.src !== next) {
-                     el.src = next;
-                     void el.play().catch(() => {});
-                   }
-                 }}
-               />
-             )}
-             {(lightboxMedia.type === 'pdf' || lightboxMedia.type === 'doc' || lightboxMedia.type === 'ppt') && (
-                 <div className="bg-white p-8 rounded-xl text-center">
-                     <FileText size={64} className="text-gray-300 mx-auto mb-4"/>
-                     <p className="font-bold mb-4">Este arquivo deve ser baixado para acessar.</p>
-                     <a href={lightboxUrl || lightboxMedia.uri} download={lightboxMedia.name} className="bg-blue-600 text-white px-6 py-3 rounded-lg font-bold">Baixar Arquivo</a>
-                 </div>
-             )}
+            {lightboxMedia.type === 'photo' && (
+              <img
+                src={lightboxUrl || mediaUrl(lightboxMedia)}
+                className="max-w-full max-h-[90vh] object-contain"
+                style={lightboxZoomGestures.imageStyle}
+                onTouchStart={lightboxZoomGestures.handleTouchStart}
+                onTouchMove={lightboxZoomGestures.handleTouchMove}
+                onTouchEnd={lightboxZoomGestures.handleTouchEnd}
+                onError={(e) => {
+                  const next = bestFallbackUrl(lightboxMedia);
+                  if (next && (e.currentTarget as HTMLImageElement).src !== next) {
+                    (e.currentTarget as HTMLImageElement).src = next;
+                  }
+                }}
+              />
+            )}
+            {lightboxMedia.type === 'video' && (
+              <video
+                src={lightboxUrl || mediaUrl(lightboxMedia)}
+                controls
+                autoPlay
+                playsInline
+                className="max-w-full max-h-[80vh] w-full"
+                onError={(e) => {
+                  const next = bestFallbackUrl(lightboxMedia);
+                  const el = e.currentTarget as HTMLVideoElement;
+                  if (next && el.src !== next) {
+                    el.src = next;
+                    void el.play().catch(() => { });
+                  }
+                }}
+              />
+            )}
+            {(lightboxMedia.type === 'pdf' || lightboxMedia.type === 'doc' || lightboxMedia.type === 'ppt') && (
+              <div className="bg-white p-8 rounded-xl text-center">
+                <FileText size={64} className="text-gray-300 mx-auto mb-4" />
+                <p className="font-bold mb-4">Este arquivo deve ser baixado para acessar.</p>
+                <a href={lightboxUrl || lightboxMedia.uri} download={lightboxMedia.name} className="bg-blue-600 text-white px-6 py-3 rounded-lg font-bold">Baixar Arquivo</a>
+              </div>
+            )}
           </div>
         </div>
       )}

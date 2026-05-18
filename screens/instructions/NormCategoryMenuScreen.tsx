@@ -24,7 +24,7 @@ export const NormCategoryMenuScreen: React.FC = () => {
   return (
     <Layout>
       <Header title={label} targetRoute="/norms" />
-      <div className="flex-1 p-6 flex flex-col gap-6 bg-gray-50 pt-8">
+      <div className="flex-1 p-6 flex flex-col gap-6 bg-gradient-to-br from-gray-50 to-gray-200 pt-8">
         
         <BigButton 
           icon={Plus} 
