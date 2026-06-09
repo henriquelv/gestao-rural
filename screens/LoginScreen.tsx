@@ -17,7 +17,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
       notify('Bem-vindo de volta!', 'success');
       onLoginSuccess();
     } else {
-      notify('Senha incorreta. Tente 1234.', 'error');
+      notify('Senha incorreta.', 'error');
     }
   };
 
@@ -48,7 +48,6 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
               />
               <Lock className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={20} />
             </div>
-            <p className="text-center text-xs text-gray-400 mt-2">(Dica: 1234)</p>
           </div>
 
           <button 

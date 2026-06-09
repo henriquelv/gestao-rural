@@ -54,6 +54,7 @@ function makeImprovement(id: string, description: string, sector: string, employ
 const BASE = '/images';
 
 export async function seedImageData(): Promise<void> {
+  if (import.meta.env.VITE_ENABLE_SEED_DATA !== 'true') return;
   if (localStorage.getItem(SEED_FLAG)) return;
 
   console.log('[Seed] Populando banco de dados com imagens...');

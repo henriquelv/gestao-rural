@@ -152,6 +152,11 @@ class NativeFarmDatabase {
     await this.db?.run(`UPDATE outbox SET status = 'error', error_message = ? WHERE id = ?`, [error, id]);
   }
 
+  async updateOutboxPayload(id: number, payload: any) {
+    if (!this.db) await this.init();
+    await this.db?.run(`UPDATE outbox SET payload = ? WHERE id = ?`, [JSON.stringify(payload), id]);
+  }
+
   async retryOutboxItem(id: number) {
     if (!this.db) await this.init();
     await this.db?.run(`UPDATE outbox SET status = 'pending', error_message = NULL WHERE id = ?`, [id]);
@@ -160,6 +165,23 @@ class NativeFarmDatabase {
   async retryAllOutboxErrors() {
     if (!this.db) await this.init();
     await this.db?.run(`UPDATE outbox SET status = 'pending', error_message = NULL WHERE status = 'error'`);
+  }
+
+  async getRawById(tableName: string, id: string): Promise<{ id: string; synced: boolean; data: any } | null> {
+    if (!this.db) await this.init();
+    const res = await this.db?.query(
+      `SELECT id, data, synced FROM kv_store WHERE table_name = ? AND id = ?`,
+      [tableName, id]
+    );
+    if (res?.values && res.values.length > 0) {
+      const row = res.values[0];
+      try {
+        return { id: row.id, synced: row.synced === 1, data: JSON.parse(row.data) };
+      } catch {
+        return null;
+      }
+    }
+    return null;
   }
 
   async getUnsyncedRawRecords(tableName: string): Promise<{ id: string; data: any }[]> {
@@ -176,6 +198,41 @@ class NativeFarmDatabase {
       }
       return acc;
     }, []);
+  }
+
+  async getOutboxSummary(): Promise<{ total: number; pending: number; errors: number; lastError: any | null }> {
+    if (!this.db) await this.init();
+    const counts = await this.db?.query(
+      `SELECT status, count(*) as c FROM outbox GROUP BY status`
+    );
+    const totalRes = await this.db?.query(`SELECT count(*) as c FROM outbox`);
+    const lastErrorRes = await this.db?.query(
+      `SELECT * FROM outbox WHERE status = 'error' ORDER BY created_at DESC LIMIT 1`
+    );
+
+    let pending = 0;
+    let errors = 0;
+    for (const row of counts?.values || []) {
+      if (row.status === 'pending') pending = Number(row.c || 0);
+      if (row.status === 'error') errors = Number(row.c || 0);
+    }
+
+    const rawLast = lastErrorRes?.values?.[0] || null;
+    let lastError = rawLast;
+    if (rawLast?.payload) {
+      try {
+        lastError = { ...rawLast, payload: JSON.parse(rawLast.payload), tableName: rawLast.table_name, errorMessage: rawLast.error_message };
+      } catch {
+        lastError = { ...rawLast, tableName: rawLast.table_name, errorMessage: rawLast.error_message };
+      }
+    }
+
+    return {
+      total: Number(totalRes?.values?.[0]?.c || 0),
+      pending,
+      errors,
+      lastError
+    };
   }
 }
 

@@ -55,7 +55,10 @@ export const Layout: React.FC<LayoutProps> = ({ children, className = '' }) => {
 
   return (
     <div className="fixed inset-0 w-full bg-gray-100 flex justify-center overflow-hidden">
-      <div className={`w-full max-w-md bg-white shadow-xl h-full flex flex-col relative ${className}`}>
+      <div
+        className={`w-full max-w-md bg-white shadow-xl h-full flex flex-col relative ${className}`}
+        style={{ paddingTop: 'env(safe-area-inset-top)', paddingBottom: 'env(safe-area-inset-bottom)' }}
+      >
         {/* Banner offline - sempre visível quando sem conexão */}
         {!isOnline && (
           <div className="bg-red-600 px-4 py-2 flex items-center justify-center gap-2 text-white text-sm font-bold">

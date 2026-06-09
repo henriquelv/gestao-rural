@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { HashRouter, Routes, Route } from 'react-router-dom';
 import { Capacitor } from '@capacitor/core';
 import { App as CapApp } from '@capacitor/app';
@@ -8,6 +8,8 @@ import { db } from './services/db.service';
 import { notify } from './services/notification.service';
 import { syncService } from './services/sync.service';
 import { seedImageData } from './services/seed.service';
+import { farmContextService } from './services/farm-context.service';
+import { ActivationScreen } from './screens/ActivationScreen';
 
 // Anomalias
 import { AnomaliesMenuScreen } from './screens/AnomaliesMenuScreen';
@@ -50,6 +52,8 @@ import { DataMetricScreen } from './screens/farmdata/DataMetricScreen';
 
 // Config
 import { SettingsScreen } from './screens/SettingsScreen';
+import { DiagnosticScreen } from './screens/DiagnosticScreen';
+import { OwnerDashboardScreen } from './screens/OwnerDashboardScreen';
 
 // Dynamic
 import { GenericMenuScreen } from './screens/GenericMenuScreen';
@@ -58,8 +62,13 @@ import { GenericMenuScreen } from './screens/GenericMenuScreen';
 import { PDFTestScreen } from './screens/PDFTestScreen';
 
 const App: React.FC = () => {
+  const [activated, setActivated] = useState(() => farmContextService.isActivated());
 
   useEffect(() => {
+    if (!activated) return;
+    // O dono não sincroniza dados de fazenda
+    if (farmContextService.getContext()?.is_owner) return;
+
     let removeBackButtonListener: (() => void) | undefined;
     let syncInterval: any;
     let running = false;
@@ -138,10 +147,10 @@ const App: React.FC = () => {
       running = true;
       window.dispatchEvent(new CustomEvent('app-sync-start'));
       try {
-        // One-time cleanup of blocking sync errors (duplicate keys)
+        // One-time retry of blocking sync errors (duplicate keys/schema fixes)
         const ERROR_CLEANUP_FLAG = 'error_cleanup_v1';
         if (!localStorage.getItem(ERROR_CLEANUP_FLAG)) {
-          console.log('[App] Executando limpeza inicial de erros de sincronização...');
+          console.log('[App] Reativando erros antigos de sincronização para nova tentativa...');
           await db.clearSyncErrors();
           localStorage.setItem(ERROR_CLEANUP_FLAG, 'true');
         }
@@ -160,14 +169,31 @@ const App: React.FC = () => {
           localStorage.setItem(METRICS_SYNC_RESET_FLAG, 'true');
         }
 
+        // Migração one-time: re-keying de IDs locais com farm_id prefix e
+        // reparo de registros antigos sem contexto de fazenda.
+        await db.migrateLocalIds();
+
         // Recuperar registros que ficaram órfãos (synced=false sem entrada no outbox)
         await db.recoverOrphanedRecords();
 
-        window.dispatchEvent(new CustomEvent('app-sync-start', { detail: { label: 'dados do servidor' } }));
-        await db.refreshFromServer();
-        await db.migrateRaspagemToConforto();
+        // Offline-first: enviar pendências locais antes de baixar o servidor.
+        // Isso evita que uma carga completa mostre dados antigos enquanto o outbox
+        // ainda tem alterações do aparelho.
         window.dispatchEvent(new CustomEvent('app-sync-start', { detail: { label: 'enviando pendentes' } }));
         await db.syncPendingData();
+
+        const FULL_REFRESH_HOTFIX_FLAG = 'full_refresh_after_supabase_switch_v6';
+        if (!localStorage.getItem(FULL_REFRESH_HOTFIX_FLAG)) {
+          console.log('[App] Forçando carga completa segura após envio de pendentes...');
+          window.dispatchEvent(new CustomEvent('app-sync-start', { detail: { label: 'carga completa' } }));
+          await db.forceFullRefreshFromServer();
+          localStorage.setItem(FULL_REFRESH_HOTFIX_FLAG, 'true');
+        }
+
+        window.dispatchEvent(new CustomEvent('app-sync-start', { detail: { label: 'atualizando dados' } }));
+        await db.refreshFromServer();
+
+        await db.migrateRaspagemToConforto();
         await seedImageData();
       } catch (error) {
         console.error('Erro durante sync cycle:', error);
@@ -191,7 +217,8 @@ const App: React.FC = () => {
       }
     };
 
-    // Startup: sync de dados primeiro, depois cache de mídia em paralelo
+    // Sync em background: não bloqueia a UI.
+    // O banner de sync no Layout mostra o progresso visualmente.
     runSyncCycle().then(runMediaCacheIfNeeded).catch(console.error);
 
     // Listener para quando a internet volta
@@ -216,7 +243,26 @@ const App: React.FC = () => {
       if (syncInterval) clearInterval(syncInterval);
       syncService.stopBackgroundRunner();
     };
-  }, []);
+  }, [activated]);
+
+  if (!activated) {
+    return (
+      <HashRouter>
+        <Routes>
+          <Route path="/diagnostics" element={<DiagnosticScreen />} />
+          <Route path="*" element={
+            <ActivationScreen onActivated={() => {
+              const ctx = farmContextService.getContext();
+              if (ctx?.is_owner) {
+                window.location.hash = '#/owner';
+              }
+              setActivated(true);
+            }} />
+          } />
+        </Routes>
+      </HashRouter>
+    );
+  }
 
   return (
     <HashRouter>
@@ -285,6 +331,8 @@ const App: React.FC = () => {
 
         {/* Configurações - proteger acesso com PIN */}
         <Route path="/settings" element={<PinGuard title="Configurações"><SettingsScreen /></PinGuard>} />
+        <Route path="/diagnostics" element={<DiagnosticScreen />} />
+        <Route path="/owner" element={<OwnerDashboardScreen />} />
 
       </Routes>
     </HashRouter>

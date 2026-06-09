@@ -5,8 +5,9 @@ import { Layout } from '../../components/Layout';
 import { Header } from '../../components/Header';
 import { MicrophoneButton } from '../../components/MicrophoneButton';
 import { FieldLabel } from '../../components/FieldLabel';
+import { EmployeeConfirmField } from '../../components/EmployeeConfirmField';
 import { Camera, Video, Save, Trash2, Clock, FileText, Paperclip, Image as ImageIcon, Lock } from 'lucide-react';
-import { MediaItem } from '../../types';
+import { Employee, MediaItem } from '../../types';
 import { db } from '../../services/db.service';
 import { notify } from '../../services/notification.service';
 import { validateFileSize } from '../../utils/media-compression';
@@ -14,6 +15,7 @@ import { SECTORS_LIST, getSectorColors } from '../../constants/sectors';
 import { PinRequestModal } from '../../components/PinRequestModal';
 import { authService } from '../../services/auth.service';
 import { mediaService } from '../../services/media.service';
+import { farmContextService } from '../../services/farm-context.service';
 
 export const AddInstructionScreen: React.FC = () => {
   const navigate = useNavigate();
@@ -22,10 +24,24 @@ export const AddInstructionScreen: React.FC = () => {
   const [timestamp] = useState(state?.fixedTimestamp || new Date().toISOString());
   const selectedSector = state?.selectedSector;
 
+  const [employees, setEmployees] = useState<Employee[]>([]);
+  const [employeeName, setEmployeeName] = useState('');
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [media, setMedia] = useState<MediaItem[]>([]);
   const [showPinModal, setShowPinModal] = useState(false);
+  const selectedEmployee = employees.find(emp => emp.name === employeeName);
+
+  useEffect(() => {
+    const load = async () => {
+      const emps = await db.getEmployees();
+      emps.sort((a, b) => a.name.localeCompare(b.name));
+      setEmployees(emps);
+      const ctx = farmContextService.getContext();
+      if (ctx?.employee_name) setEmployeeName(ctx.employee_name);
+    };
+    load();
+  }, []);
 
   const handleGalleryPick = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
@@ -78,7 +94,16 @@ export const AddInstructionScreen: React.FC = () => {
   };
 
   const performSave = async () => {
-    await db.addInstruction({ id: crypto.randomUUID(), createdAt: timestamp, title, sector: 'Geral', description, media });
+    await db.addInstruction({
+      id: crypto.randomUUID(),
+      createdAt: timestamp,
+      title,
+      sector: selectedSector || 'Geral',
+      description,
+      employee_id: selectedEmployee?.id || farmContextService.getContext()?.employee_id,
+      employee_name: employeeName || farmContextService.getContext()?.employee_name,
+      media
+    });
     notify('Instrução salva!', "success");
     navigate('/instructions/list');
   };
@@ -91,6 +116,14 @@ export const AddInstructionScreen: React.FC = () => {
       </div>
 
       <div className="flex-1 bg-white p-6 space-y-6 overflow-y-auto pb-10">
+        <EmployeeConfirmField
+          label="Funcionário"
+          value={employeeName}
+          employees={employees}
+          onChange={setEmployeeName}
+          helpText="Nome que ficará vinculado à instrução criada."
+        />
+
         <div>
           <FieldLabel label="Título" />
           <div className="relative">

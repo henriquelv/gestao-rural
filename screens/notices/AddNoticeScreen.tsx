@@ -5,6 +5,7 @@ import { Layout } from '../../components/Layout';
 import { Header } from '../../components/Header';
 import { MicrophoneButton } from '../../components/MicrophoneButton';
 import { FieldLabel } from '../../components/FieldLabel';
+import { EmployeeConfirmField } from '../../components/EmployeeConfirmField';
 import { Image as ImageIcon, FileText, Video, Trash2, Save, Clock, Paperclip, Camera } from 'lucide-react';
 import { MediaItem } from '../../types';
 import { db } from '../../services/db.service';
@@ -12,6 +13,7 @@ import { notify } from '../../services/notification.service';
 import { validateFileSize } from '../../utils/media-compression';
 import { mediaService } from '../../services/media.service';
 import { getSectorColors } from '../../constants/sectors';
+import { farmContextService } from '../../services/farm-context.service';
 
 export const AddNoticeScreen: React.FC = () => {
   const navigate = useNavigate();
@@ -27,6 +29,7 @@ export const AddNoticeScreen: React.FC = () => {
   const [sector, setSector] = useState('');
   const [media, setMedia] = useState<MediaItem[]>([]);
   const [isSaving, setIsSaving] = useState(false);
+  const selectedEmployee = employees.find(emp => emp.name === responsible);
 
   const handleGalleryPick = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
@@ -43,6 +46,8 @@ export const AddNoticeScreen: React.FC = () => {
       const emps = await db.getEmployees();
       emps.sort((a, b) => a.name.localeCompare(b.name));
       setEmployees(emps);
+      const ctx = farmContextService.getContext();
+      if (ctx?.employee_name) setResponsible(ctx.employee_name);
       const s = await db.getSectors();
       const cleaned = (s || []).map((x) => (x || '').toString().trim()).filter((x) => x.length > 0);
       setSectors(cleaned);
@@ -88,7 +93,16 @@ export const AddNoticeScreen: React.FC = () => {
 
     setIsSaving(true);
     try {
-      await db.addNotice({ id: crypto.randomUUID(), createdAt: timestamp, content: finalContent, responsible, media });
+      const ctx = farmContextService.getContext();
+      await db.addNotice({
+        id: crypto.randomUUID(),
+        createdAt: timestamp,
+        content: finalContent,
+        responsible,
+        employee_id: selectedEmployee?.id || ctx?.employee_id,
+        employee_name: responsible || ctx?.employee_name,
+        media
+      });
       notify("Comunicado salvo com sucesso!", "success");
       navigate('/notices/list');
     } catch (e) {
@@ -109,13 +123,13 @@ export const AddNoticeScreen: React.FC = () => {
 
       <div className="flex-1 bg-white p-6 space-y-5 overflow-y-auto pb-10">
 
-        <div>
-          <FieldLabel label="Responsável" />
-          <select value={responsible} onChange={e => setResponsible(e.target.value)} className="w-full p-4 border border-gray-200 rounded-xl bg-gray-50 font-bold text-gray-700">
-            <option value="">Selecione...</option>
-            {employees.map((u) => <option key={u.id} value={u.name}>{u.name}</option>)}
-          </select>
-        </div>
+        <EmployeeConfirmField
+          label="Responsável"
+          value={responsible}
+          employees={employees}
+          onChange={setResponsible}
+          helpText="Nome do funcionário que está criando o comunicado."
+        />
 
         <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200">
           <FieldLabel label="Setor" />

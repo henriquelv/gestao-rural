@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { Layout } from '../components/Layout';
 import { Header } from '../components/Header';
 import { FieldLabel } from '../components/FieldLabel';
-import { Trash2, Plus, Save, Home, Edit2, Upload, User, Tag, Square, Type, MessageSquare, AlertCircle, GripVertical, Image as ImageIcon, FolderPlus, X, Lock, ArrowRight, LogOut, Database, RefreshCw, FileText, Droplets, Activity, Ban, Baby, Pencil, TrendingUp, CheckCircle } from 'lucide-react';
+import { Trash2, Plus, Save, Home, Edit2, Upload, User, Tag, Square, Type, MessageSquare, AlertCircle, GripVertical, Image as ImageIcon, FolderPlus, X, Lock, ArrowRight, LogOut, Database, RefreshCw, FileText, Droplets, Activity, Ban, Baby, Pencil, TrendingUp, CheckCircle, Smartphone, KeyRound } from 'lucide-react';
 import { db } from '../services/db.service';
 import { Employee, FarmSettings, UIConfig, AppColor, AppIcon, UIBlock, CustomPage, BlockType, Anomaly, Instruction, Notice, Improvement, FarmDoc } from '../types';
 import { notify } from '../services/notification.service';
@@ -12,8 +12,10 @@ import { BigButton } from '../components/BigButton';
 import { authService } from '../services/auth.service';
 import { PinRequestModal } from '../components/PinRequestModal';
 import { DEFAULT_SECTOR_BASE_COLOR, getSectorColorOverrides, setSectorColorOverrides, makeSectorColor, getSectorColors } from '../constants/sectors';
+import { farmContextService } from '../services/farm-context.service';
+import { AdminPanel } from '../components/AdminPanel';
 
-type Tab = 'dashboard' | 'registries' | 'visual' | 'data' | 'records';
+type Tab = 'dashboard' | 'admin' | 'registries' | 'visual' | 'data' | 'records';
 type SubTab = 'employees' | 'sectors';
 type RecordType = 'anomalies' | 'instructions' | 'notices' | 'improvements' | 'norms';
 
@@ -63,6 +65,8 @@ const DEFAULT_SCREENS = [
 
 export const SettingsScreen: React.FC = () => {
   const navigate = useNavigate();
+  const [farmContext, setFarmContext] = useState(() => farmContextService.getContext());
+  const isOwner = farmContext?.is_owner === true;
   // Tabs
   const [activeTab, setActiveTab] = useState<Tab>('dashboard');
   const [activeSubTab, setActiveSubTab] = useState<SubTab>('employees');
@@ -637,6 +641,15 @@ export const SettingsScreen: React.FC = () => {
     window.location.reload(); // Recarrega para bloquear tudo novamente
   };
 
+  const handleReactivateApp = () => {
+    protectedAction(async () => {
+      if (!confirm('Reativar este aplicativo? Os dados locais nao serao apagados, mas sera necessario informar o codigo da fazenda novamente.')) return;
+      farmContextService.clearContext();
+      setFarmContext(null);
+      window.location.reload();
+    });
+  };
+
   const currentBlocks = uiConfig?.buttons
     .filter(b => b.screen === selectedScreen)
     .sort((a, b) => a.order - b.order) || [];
@@ -659,6 +672,7 @@ export const SettingsScreen: React.FC = () => {
       <div className="bg-white shadow-sm z-10 sticky top-16 border-b border-gray-200 overflow-x-auto no-scrollbar">
         <div className="flex p-2 gap-2 min-w-max">
           <button onClick={() => setActiveTab('dashboard')} className={`px-4 py-2 rounded-lg text-xs font-bold uppercase transition-all ${activeTab === 'dashboard' ? 'bg-purple-600 text-white shadow' : 'bg-gray-100 text-gray-500'}`}>Dashboard</button>
+          {isOwner && <button onClick={() => setActiveTab('admin')} className={`px-4 py-2 rounded-lg text-xs font-bold uppercase transition-all ${activeTab === 'admin' ? 'bg-gray-900 text-white shadow' : 'bg-gray-100 text-gray-500'}`}>Admin</button>}
           <button onClick={() => setActiveTab('registries')} className={`px-4 py-2 rounded-lg text-xs font-bold uppercase transition-all ${activeTab === 'registries' ? 'bg-green-600 text-white shadow' : 'bg-gray-100 text-gray-500'}`}>Cadastros</button>
           <button onClick={() => setActiveTab('visual')} className={`px-4 py-2 rounded-lg text-xs font-bold uppercase transition-all ${activeTab === 'visual' ? 'bg-green-600 text-white shadow' : 'bg-gray-100 text-gray-500'}`}>Visual</button>
           <button onClick={() => setActiveTab('records')} className={`px-4 py-2 rounded-lg text-xs font-bold uppercase transition-all ${activeTab === 'records' ? 'bg-blue-600 text-white shadow' : 'bg-gray-100 text-gray-500'}`}>Registros</button>
@@ -671,6 +685,26 @@ export const SettingsScreen: React.FC = () => {
         {/* --- DASHBOARD TAB --- */}
         {activeTab === 'dashboard' && (
           <div className="space-y-6">
+            <div className="bg-white p-5 rounded-2xl shadow-lg border-2 border-green-100">
+              <h2 className="text-lg font-black text-gray-800 mb-4 flex items-center gap-2">
+                <Smartphone size={22} className="text-green-700" />
+                Ativação
+              </h2>
+              <div className="grid gap-3 text-sm">
+                <div className="bg-green-50 border border-green-200 rounded-xl p-3">
+                  <p className="text-xs font-black uppercase text-green-700">Fazenda</p>
+                  <p className="font-black text-gray-900">{farmContext?.farm_name || 'Nao ativado'}</p>
+                </div>
+                <div className="bg-gray-50 border border-gray-200 rounded-xl p-3">
+                  <p className="text-xs font-black uppercase text-gray-500">Funcionario atual</p>
+                  <p className="font-black text-gray-900">{farmContext?.employee_name || '-'}</p>
+                </div>
+                <button onClick={handleReactivateApp} className="w-full bg-gray-900 text-white font-black py-3 rounded-xl flex items-center justify-center gap-2 uppercase text-xs">
+                  <KeyRound size={16} /> Trocar fazenda/funcionario
+                </button>
+              </div>
+            </div>
+
             <div className="bg-white p-6 rounded-2xl shadow-lg border-2 border-purple-100">
               <h2 className="text-2xl font-black text-gray-800 mb-6">Resumo de Dados</h2>
 
@@ -726,6 +760,8 @@ export const SettingsScreen: React.FC = () => {
             </div>
           </div>
         )}
+
+        {activeTab === 'admin' && <AdminPanel />}
 
         {/* --- REGISTRIES TAB --- */}
         {activeTab === 'registries' && (
@@ -1272,6 +1308,25 @@ export const SettingsScreen: React.FC = () => {
                 className="w-full mb-4 bg-gray-900 text-white font-black py-4 rounded-xl shadow flex items-center justify-center gap-2 uppercase"
               >
                 <RefreshCw size={18} /> Atualizar agora
+              </button>
+              <button
+                onClick={() => {
+                  void (async () => {
+                    notify('Recarregando todos os dados do servidor...', 'info');
+                    await db.forceFullRefreshFromServer();
+                    notify('Carga completa concluída.', 'success');
+                    await loadSyncStatus();
+                  })();
+                }}
+                className="w-full mb-4 bg-blue-700 text-white font-black py-4 rounded-xl shadow flex items-center justify-center gap-2 uppercase"
+              >
+                <RefreshCw size={18} /> Recarregar tudo do servidor
+              </button>
+              <button
+                onClick={() => navigate('/diagnostics')}
+                className="w-full mb-4 bg-white text-gray-900 font-black py-4 rounded-xl border border-gray-200 shadow-sm flex items-center justify-center gap-2 uppercase"
+              >
+                <Smartphone size={18} /> Abrir diagnostico do aparelho
               </button>
 
               <div className="bg-gray-50 border border-gray-200 p-4 rounded-xl mb-4">

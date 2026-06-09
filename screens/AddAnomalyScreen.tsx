@@ -6,6 +6,7 @@ import { Layout } from '../components/Layout';
 import { Header } from '../components/Header';
 import { MicrophoneButton } from '../components/MicrophoneButton';
 import { FieldLabel } from '../components/FieldLabel';
+import { EmployeeConfirmField } from '../components/EmployeeConfirmField';
 import { Anomaly, MediaItem, Employee } from '../types';
 import { db } from '../services/db.service';
 import { notify } from '../services/notification.service';
@@ -14,6 +15,7 @@ import { validateFileSize } from '../utils/media-compression';
 import { SECTORS_LIST, getSectorColors } from '../constants/sectors';
 import { mediaService } from '../services/media.service';
 import { syncService } from '../services/sync.service';
+import { farmContextService } from '../services/farm-context.service';
 
 export const AddAnomalyScreen: React.FC = () => {
   const navigate = useNavigate();
@@ -33,11 +35,15 @@ export const AddAnomalyScreen: React.FC = () => {
   const [analyzing, setAnalyzing] = useState(false);
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
 
+  const selectedEmployee = employees.find(emp => emp.name === responsible);
+
   useEffect(() => {
     const loadLists = async () => {
       const emps = await db.getEmployees();
       emps.sort((a, b) => a.name.localeCompare(b.name));
       setEmployees(emps);
+      const ctx = farmContextService.getContext();
+      if (ctx?.employee_name) setResponsible(ctx.employee_name);
       if (SECTORS_LIST.length > 0 && !sector) setSector(SECTORS_LIST[0]);
     };
     loadLists();
@@ -129,6 +135,8 @@ export const AddAnomalyScreen: React.FC = () => {
       id: crypto.randomUUID(),
       createdAt: timestamp,
       responsible,
+      employee_id: selectedEmployee?.id || farmContextService.getContext()?.employee_id,
+      employee_name: responsible || farmContextService.getContext()?.employee_name,
       sector,
       description,
       immediateSolution,
@@ -167,19 +175,13 @@ export const AddAnomalyScreen: React.FC = () => {
 
       <div className="flex-1 overflow-y-auto bg-gray-50 p-4 space-y-6 pb-10">
 
-        <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200">
-          <FieldLabel label="Responsável" helpText="Quem está registrando?" />
-          <select
-            value={responsible}
-            onChange={(e) => setResponsible(e.target.value)}
-            className="w-full p-4 text-lg bg-gray-50 border border-gray-200 rounded-xl font-bold text-gray-700 focus:ring-2 focus:ring-blue-500 outline-none appearance-none"
-          >
-            <option value="">Selecione o funcionário...</option>
-            {employees.map(emp => (
-              <option key={emp.id} value={emp.name}>{emp.name}</option>
-            ))}
-          </select>
-        </div>
+        <EmployeeConfirmField
+          label="Responsável"
+          value={responsible}
+          employees={employees}
+          onChange={setResponsible}
+          helpText="Nome usado automaticamente pela ativação deste aparelho."
+        />
 
         <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200">
           <FieldLabel label="Setor" helpText="Área da fazenda." />

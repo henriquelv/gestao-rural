@@ -12,8 +12,9 @@ import { notify } from '../../services/notification.service';
 import { getSectorColors } from '../../constants/sectors';
 import { useImageZoom } from '../../utils/useImageZoom';
 import { PinRequestModal } from '../../components/PinRequestModal';
-import { authService } from '../../services/auth.service';
-import { Trash2, User, Image as ImageIcon, Video, FileText, Presentation, Download, Filter, LayoutGrid, List as ListIcon, X, Calendar, Camera, Bell } from 'lucide-react';
+import { EmptyState, FilterOption, FilterSheet, FilterToolbar } from '../../components/UiPrimitives';
+import { SECTORS_LIST } from '../../constants/sectors';
+import { Trash2, User, Image as ImageIcon, Video, FileText, Presentation, Download, X, Calendar, LayoutGrid, Paperclip, Search } from 'lucide-react';
 
 export const ListNoticesScreen: React.FC = () => {
   const navigate = useNavigate();
@@ -22,7 +23,11 @@ export const ListNoticesScreen: React.FC = () => {
   const [viewingMedia, setViewingMedia] = useState<MediaItem | null>(null);
   const [viewingUrl, setViewingUrl] = useState<string>('');
   const [viewingZoom, setViewingZoom] = useState(1);
-  const [filterPeriod, setFilterPeriod] = useState<'all' | 'today'>('all');
+  const [filterPeriod, setFilterPeriod] = useState<'all' | 'today' | '7days' | 'month'>('all');
+  const [filterSectors, setFilterSectors] = useState<string[]>([]);
+  const [filterResponsible, setFilterResponsible] = useState('');
+  const [filterMedia, setFilterMedia] = useState<'all' | 'with' | 'without'>('all');
+  const [searchTerm, setSearchTerm] = useState('');
   const [showPinModal, setShowPinModal] = useState(false);
   const [pendingAction, setPendingAction] = useState<(() => Promise<void> | void) | null>(null);
 
@@ -78,14 +83,63 @@ export const ListNoticesScreen: React.FC = () => {
     }
   };
 
+  const toggleSectorFilter = (sector: string) => {
+    setFilterSectors(prev => prev.includes(sector) ? prev.filter(item => item !== sector) : [...prev, sector]);
+  };
+
   const filteredNotices = useMemo(() => {
-    let res = notices;
+    let res = [...notices];
     if (filterPeriod === 'today') {
       const today = new Date().toLocaleDateString('pt-BR');
       res = res.filter(n => localDay(n.createdAt) === today);
+    } else if (filterPeriod === '7days') {
+      const cutoff = new Date();
+      cutoff.setDate(cutoff.getDate() - 7);
+      res = res.filter(n => new Date(n.createdAt) >= cutoff);
+    } else if (filterPeriod === 'month') {
+      const month = new Date().toISOString().slice(0, 7);
+      res = res.filter(n => n.createdAt.startsWith(month));
     }
+    if (filterSectors.length > 0) {
+      res = res.filter(n => filterSectors.includes(parseSectorFromContent(n.content).sector));
+    }
+    if (filterResponsible) {
+      res = res.filter(n => (n.employee_name || n.responsible || '').toLowerCase() === filterResponsible.toLowerCase());
+    }
+    if (filterMedia === 'with') res = res.filter(n => (n.media || []).length > 0);
+    if (filterMedia === 'without') res = res.filter(n => !n.media || n.media.length === 0);
+    if (searchTerm.trim()) {
+      const term = searchTerm.trim().toLowerCase();
+      res = res.filter(n => {
+        const parsed = parseSectorFromContent(n.content);
+        return parsed.content.toLowerCase().includes(term)
+          || parsed.sector.toLowerCase().includes(term)
+          || (n.responsible || '').toLowerCase().includes(term)
+          || (n.employee_name || '').toLowerCase().includes(term);
+      });
+    }
+    res.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
     return res;
-  }, [notices, filterPeriod]);
+  }, [notices, filterPeriod, filterSectors, filterResponsible, filterMedia, searchTerm]);
+
+  const responsibleOptions = useMemo(() => {
+    const names = notices.map(n => n.employee_name || n.responsible).filter(Boolean);
+    return Array.from(new Set(names)).sort((a, b) => a.localeCompare(b));
+  }, [notices]);
+
+  const activeFiltersCount = filterSectors.length
+    + (filterPeriod !== 'all' ? 1 : 0)
+    + (filterResponsible ? 1 : 0)
+    + (filterMedia !== 'all' ? 1 : 0)
+    + (searchTerm.trim() ? 1 : 0);
+
+  const clearFilters = () => {
+    setFilterPeriod('all');
+    setFilterSectors([]);
+    setFilterResponsible('');
+    setFilterMedia('all');
+    setSearchTerm('');
+  };
 
   const getIcon = (type: string) => {
     switch (type) {
@@ -161,14 +215,12 @@ export const ListNoticesScreen: React.FC = () => {
     <Layout>
       <Header title="Comunicados" targetRoute="/notices" />
 
-      {/* TOOLBAR */}
-      <div className="bg-white border-b border-gray-200 p-2 shadow-sm z-10 sticky top-16 flex flex-col gap-2">
-        <div className="flex gap-2">
-          <button onClick={() => setShowFilters(true)} className={`flex-1 flex items-center justify-center px-4 py-3 rounded-lg font-bold border-2 transition-colors ${filterPeriod !== 'all' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-200'}`}>
-            <Filter size={18} className="mr-2" /> {filterPeriod !== 'all' ? `Filtros (1)` : 'Filtrar'}
-          </button>
-        </div>
-      </div>
+      <FilterToolbar
+        activeCount={activeFiltersCount}
+        onOpen={() => setShowFilters(true)}
+        resultCount={filteredNotices.length}
+        totalCount={notices.length}
+      />
 
       <div className="flex-1 bg-gray-100 p-4 overflow-y-auto">
         <div className="space-y-3">
@@ -178,25 +230,25 @@ export const ListNoticesScreen: React.FC = () => {
             const content = parsed.content;
             const photo = n.media?.find(m => m.type === 'photo');
             const hasVideo = n.media?.some(m => m.type === 'video');
+            const hasDocs = n.media?.some(m => ['pdf', 'doc', 'ppt'].includes(m.type));
+            const author = n.employee_name || n.responsible;
             
             return (
               <div
                 key={n.id}
                 onClick={() => navigate(`/notices/detail/${n.id}`)}
-                className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden mb-4 cursor-pointer hover:shadow-md active:opacity-90 transition-all"
+                className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden mb-4 cursor-pointer hover:shadow-md active:opacity-90 transition-all"
               >
                 <div className="p-4">
                   <div className="flex items-start gap-4">
-                    {/* Ícone Quadrado */}
                     <div className="w-14 h-14 rounded-xl flex items-center justify-center shrink-0 border border-gray-100" style={{ backgroundColor: getSectorColors(sector).bg, color: getSectorColors(sector).fg }}>
                       {photo ? <ImageIcon size={24} /> : hasVideo ? <Video size={24} /> : <FileText size={24} />}
                     </div>
                     
-                    {/* Textos */}
                     <div className="flex-1 min-w-0">
                       <div className="flex justify-between items-start mb-1">
-                        <h3 className="font-bold text-gray-800 text-lg leading-tight truncate">
-                          {sector ? `${sector}` : 'Comunicado'} - {n.responsible}
+                        <h3 className="font-black text-gray-800 text-base leading-tight truncate">
+                          {sector || 'Comunicado'}
                         </h3>
                         <button onClick={(e) => { e.stopPropagation(); handleDelete(n); }} className="p-1 -mr-1 -mt-1 text-gray-300 hover:text-red-500 active:text-red-600 transition-colors">
                           <Trash2 size={18} />
@@ -205,41 +257,82 @@ export const ListNoticesScreen: React.FC = () => {
                       <p className="text-gray-600 text-sm mb-2 line-clamp-2">
                         {content}
                       </p>
-                      <p className="text-gray-400 text-xs">
-                        {new Date(n.createdAt).toLocaleDateString('pt-BR')}
-                      </p>
+                      <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500">
+                        <span className="inline-flex items-center gap-1"><Calendar size={13} />{new Date(n.createdAt).toLocaleDateString('pt-BR')}</span>
+                        <span className="inline-flex items-center gap-1 min-w-0"><User size={13} /><span className="truncate max-w-[120px]">{author}</span></span>
+                        {(photo || hasVideo || hasDocs) && (
+                          <span className="inline-flex items-center gap-1 text-blue-600 font-bold">
+                            <Paperclip size={13} />{n.media.length}
+                          </span>
+                        )}
+                      </div>
                     </div>
                   </div>
                 </div>
               </div>
             );
           })}
+          {filteredNotices.length === 0 && (
+            <EmptyState title="Nenhum comunicado encontrado" description="Ajuste os filtros ou registre um novo comunicado." />
+          )}
         </div>
       </div>
 
-      {/* FILTER MODAL */}
       {showFilters && (
-        <div className="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center animate-in fade-in">
-          <div className="bg-white w-full max-w-md p-6 rounded-t-2xl sm:rounded-xl shadow-2xl">
-            <div className="flex justify-between items-center mb-6">
-              <h2 className="text-2xl font-black text-gray-800">Filtrar</h2>
-              <button onClick={() => setShowFilters(false)} className="p-2 bg-gray-100 rounded-full"><X size={24} /></button>
-            </div>
-            <div className="space-y-6 pb-6">
-              <div>
-                <label className="block text-sm font-bold text-gray-500 mb-2 uppercase flex items-center"><Calendar size={16} className="mr-1" /> Período</label>
-                <div className="grid grid-cols-2 gap-2">
-                  <button onClick={() => setFilterPeriod('today')} className={`p-3 rounded-lg font-bold border-2 ${filterPeriod === 'today' ? 'bg-blue-600 text-white' : 'bg-white text-gray-600'}`}>Hoje</button>
-                  <button onClick={() => setFilterPeriod('all')} className={`p-3 rounded-lg font-bold border-2 ${filterPeriod === 'all' ? 'bg-blue-600 text-white' : 'bg-white text-gray-600'}`}>Todos</button>
-                </div>
-              </div>
-            </div>
-            <div className="flex gap-3 pt-4 border-t border-gray-100">
-              <button onClick={() => { setFilterPeriod('all'); setShowFilters(false); }} className="flex-1 py-4 text-gray-600 font-bold text-lg bg-gray-100 rounded-xl">Limpar</button>
-              <button onClick={() => setShowFilters(false)} className="flex-2 w-2/3 py-4 text-white font-bold text-lg bg-blue-600 rounded-xl shadow-lg">Aplicar</button>
+        <FilterSheet title="Filtrar comunicados" onClose={() => setShowFilters(false)} onClear={clearFilters}>
+          <div>
+            <label className="block text-sm font-black text-gray-500 mb-2 uppercase flex items-center"><Search size={16} className="mr-1" /> Busca</label>
+            <input
+              value={searchTerm}
+              onChange={e => setSearchTerm(e.target.value)}
+              className="w-full p-3 border-2 border-gray-200 rounded-lg outline-none focus:border-blue-500 font-bold text-gray-700"
+              placeholder="Texto, setor ou funcionário"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-black text-gray-500 mb-2 uppercase flex items-center"><Calendar size={16} className="mr-1" /> Período</label>
+            <div className="grid grid-cols-2 gap-2">
+              <FilterOption active={filterPeriod === 'today'} onClick={() => setFilterPeriod('today')}>Hoje</FilterOption>
+              <FilterOption active={filterPeriod === '7days'} onClick={() => setFilterPeriod('7days')}>7 Dias</FilterOption>
+              <FilterOption active={filterPeriod === 'month'} onClick={() => setFilterPeriod('month')}>Este Mês</FilterOption>
+              <FilterOption active={filterPeriod === 'all'} onClick={() => setFilterPeriod('all')}>Todos</FilterOption>
             </div>
           </div>
-        </div>
+          <div>
+            <label className="block text-sm font-black text-gray-500 mb-2 uppercase flex items-center"><User size={16} className="mr-1" /> Funcionário</label>
+            <select
+              className="w-full p-3 border-2 border-gray-200 rounded-lg bg-white font-bold text-gray-700 outline-none focus:border-blue-500"
+              value={filterResponsible}
+              onChange={(e) => setFilterResponsible(e.target.value)}
+            >
+              <option value="">Todos</option>
+              {responsibleOptions.map(name => <option key={name} value={name}>{name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm font-black text-gray-500 mb-2 uppercase flex items-center"><LayoutGrid size={16} className="mr-1" /> Setores</label>
+            <div className="grid grid-cols-2 gap-2">
+              {SECTORS_LIST.map(s => (
+                <FilterOption
+                  key={s}
+                  active={filterSectors.includes(s)}
+                  onClick={() => toggleSectorFilter(s)}
+                  style={{ backgroundColor: getSectorColors(s).bg, color: getSectorColors(s).fg, borderColor: getSectorColors(s).border }}
+                >
+                  {s}
+                </FilterOption>
+              ))}
+            </div>
+          </div>
+          <div>
+            <label className="block text-sm font-black text-gray-500 mb-2 uppercase flex items-center"><Paperclip size={16} className="mr-1" /> Anexos</label>
+            <div className="grid grid-cols-3 gap-2">
+              <FilterOption active={filterMedia === 'all'} onClick={() => setFilterMedia('all')}>Todos</FilterOption>
+              <FilterOption active={filterMedia === 'with'} onClick={() => setFilterMedia('with')}>Com</FilterOption>
+              <FilterOption active={filterMedia === 'without'} onClick={() => setFilterMedia('without')}>Sem</FilterOption>
+            </div>
+          </div>
+        </FilterSheet>
       )}
 
       {viewingMedia && (

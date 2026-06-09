@@ -3,7 +3,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { Layout } from '../../components/Layout';
 import { Header } from '../../components/Header';
-import { Filter, X, Calendar, LayoutGrid, List as ListIcon, Table as TableIcon, FileText, Video, Download, Presentation, Image as ImageIcon } from 'lucide-react';
+import { X, Calendar, LayoutGrid, FileText, Video, Download, Presentation, Image as ImageIcon, Search, Paperclip, User } from 'lucide-react';
 import { Instruction, MediaItem } from '../../types';
 import { db } from '../../services/db.service';
 import { localdb } from '../../services/localdb';
@@ -14,7 +14,7 @@ import { supabase } from '../../services/supabase';
 import { notify } from '../../services/notification.service';
 import { useImageZoom } from '../../utils/useImageZoom';
 import { PinRequestModal } from '../../components/PinRequestModal';
-import { authService } from '../../services/auth.service';
+import { EmptyState, FilterOption, FilterSheet, FilterToolbar } from '../../components/UiPrimitives';
 
 export const ListInstructionsScreen: React.FC = () => {
   const navigate = useNavigate();
@@ -30,6 +30,9 @@ export const ListInstructionsScreen: React.FC = () => {
   const [viewingZoom, setViewingZoom] = useState(1);
   const [filterSectors, setFilterSectors] = useState<string[]>(state?.selectedSector ? [state.selectedSector] : []);
   const [filterPeriod, setFilterPeriod] = useState<'all' | 'today' | '7days'>('all');
+  const [filterEmployee, setFilterEmployee] = useState('');
+  const [filterMedia, setFilterMedia] = useState<'all' | 'with' | 'without'>('all');
+  const [searchTerm, setSearchTerm] = useState('');
 
   const viewingZoomGestures = useImageZoom((newZoom) => setViewingZoom(newZoom));
 
@@ -72,15 +75,48 @@ export const ListInstructionsScreen: React.FC = () => {
     if (filterPeriod === 'today') {
       const today = new Date().toISOString().split('T')[0];
       result = result.filter(i => i.createdAt.startsWith(today));
+    } else if (filterPeriod === '7days') {
+      const cutoff = new Date();
+      cutoff.setDate(cutoff.getDate() - 7);
+      result = result.filter(i => new Date(i.createdAt) >= cutoff);
+    }
+    if (filterEmployee) {
+      result = result.filter(i => (i.employee_name || '').toLowerCase() === filterEmployee.toLowerCase());
+    }
+    if (filterMedia === 'with') result = result.filter(i => (i.media || []).length > 0);
+    if (filterMedia === 'without') result = result.filter(i => !i.media || i.media.length === 0);
+    if (searchTerm.trim()) {
+      const term = searchTerm.trim().toLowerCase();
+      result = result.filter(i => (i.title || '').toLowerCase().includes(term)
+        || (i.description || '').toLowerCase().includes(term)
+        || (i.sector || '').toLowerCase().includes(term)
+        || (i.employee_name || '').toLowerCase().includes(term));
     }
 
     // Sort by most recent
     result.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
     return result;
-  }, [items, filterSectors, filterPeriod]);
+  }, [items, filterSectors, filterPeriod, filterEmployee, filterMedia, searchTerm]);
 
-  const activeFiltersCount = filterSectors.length + (filterPeriod !== 'all' ? 1 : 0);
+  const employeeOptions = useMemo(() => {
+    const names = items.map(i => i.employee_name).filter(Boolean) as string[];
+    return Array.from(new Set(names)).sort((a, b) => a.localeCompare(b));
+  }, [items]);
+
+  const activeFiltersCount = filterSectors.length
+    + (filterPeriod !== 'all' ? 1 : 0)
+    + (filterEmployee ? 1 : 0)
+    + (filterMedia !== 'all' ? 1 : 0)
+    + (searchTerm.trim() ? 1 : 0);
+
+  const clearFilters = () => {
+    setFilterSectors([]);
+    setFilterPeriod('all');
+    setFilterEmployee('');
+    setFilterMedia('all');
+    setSearchTerm('');
+  };
 
   const getIcon = (type: string) => {
     switch (type) {
@@ -141,22 +177,18 @@ export const ListInstructionsScreen: React.FC = () => {
     <Layout>
       <Header title="Lista de Instruções" targetRoute="/instructions" />
 
-      <div className="bg-white border-b border-gray-200 p-2 shadow-sm z-10 sticky top-16 flex flex-col gap-2">
-        <div className="flex gap-2">
-          <button
-            onClick={() => setShowFilters(true)}
-            className={`flex-1 flex items-center justify-center px-4 py-3 rounded-lg font-bold border-2 transition-colors ${activeFiltersCount > 0 ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-200'}`}
-          >
-            <Filter size={18} className="mr-2" /> {activeFiltersCount > 0 ? `Filtros (${activeFiltersCount})` : 'Filtrar'}
-          </button>
-        </div>
-      </div>
+      <FilterToolbar
+        activeCount={activeFiltersCount}
+        onOpen={() => setShowFilters(true)}
+        resultCount={filteredItems.length}
+        totalCount={items.length}
+      />
 
       <div className="flex-1 bg-gray-100 p-4 space-y-4 overflow-y-auto">
         <div className="space-y-3">
           {filteredItems.map((item, index) => {
             const dateStr = localDay(item.createdAt);
-            const isLatest = index === 0; // Opcional, para destacar a mais recente
+            const hasMedia = (item.media || []).length > 0;
             
             return (
               <div
@@ -176,9 +208,11 @@ export const ListInstructionsScreen: React.FC = () => {
                       <h3 className="font-bold text-gray-800 text-lg leading-tight mb-1 truncate">
                         {item.title || `Instrução - ${item.sector}`}
                       </h3>
-                      <p className="text-gray-400 text-sm">
-                        {dateStr}
-                      </p>
+                      <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500">
+                        <span className="inline-flex items-center gap-1"><Calendar size={13} />{dateStr}</span>
+                        {item.employee_name && <span className="inline-flex items-center gap-1"><User size={13} />{item.employee_name}</span>}
+                        {hasMedia && <span className="inline-flex items-center gap-1 text-blue-600 font-bold"><Paperclip size={13} />{item.media.length}</span>}
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -187,46 +221,65 @@ export const ListInstructionsScreen: React.FC = () => {
           })}
         </div>
 
-        {filteredItems.length === 0 && <p className="text-center text-gray-400 mt-10">Nenhuma instrução encontrada.</p>}
+        {filteredItems.length === 0 && <EmptyState title="Nenhuma instrução encontrada" description="Ajuste os filtros ou registre uma nova instrução." />}
       </div>
 
       {showFilters && (
-        <div className="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center animate-in fade-in">
-          <div className="bg-white w-full max-w-md p-6 rounded-t-2xl sm:rounded-xl shadow-2xl animate-in slide-in-from-bottom max-h-[90vh] overflow-y-auto">
-            <div className="flex justify-between items-center mb-6">
-              <h2 className="text-2xl font-black text-gray-800">Filtrar</h2>
-              <button onClick={() => setShowFilters(false)} className="p-2 bg-gray-100 rounded-full"><X size={24} /></button>
-            </div>
-            <div className="space-y-6 pb-6">
-              <div>
-                <label className="block text-sm font-bold text-gray-500 mb-2 uppercase flex items-center"><Calendar size={16} className="mr-1" /> Período</label>
-                <div className="grid grid-cols-3 gap-2">
-                  <button onClick={() => setFilterPeriod('today')} className={`p-3 rounded-lg font-bold border-2 ${filterPeriod === 'today' ? 'bg-blue-600 text-white' : 'bg-white text-gray-600'}`}>Hoje</button>
-                  <button onClick={() => setFilterPeriod('7days')} className={`p-3 rounded-lg font-bold border-2 ${filterPeriod === '7days' ? 'bg-blue-600 text-white' : 'bg-white text-gray-600'}`}>7 Dias</button>
-                  <button onClick={() => setFilterPeriod('all')} className={`p-3 rounded-lg font-bold border-2 ${filterPeriod === 'all' ? 'bg-blue-600 text-white' : 'bg-white text-gray-600'}`}>Todos</button>
-                </div>
-              </div>
-              <div>
-                <label className="block text-sm font-bold text-gray-500 mb-2 uppercase flex items-center"><LayoutGrid size={16} className="mr-1" /> Setores</label>
-                <div className="grid grid-cols-2 gap-2">
-                  {SECTORS_LIST.map(s => (
-                    <button
-                      key={s}
-                      onClick={() => toggleSectorFilter(s)}
-                      className={`p-2 rounded-lg text-sm font-bold border-2 ${filterSectors.includes(s) ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-200'}`}
-                    >
-                      {s}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>
-            <div className="flex gap-3 pt-4 border-t border-gray-100">
-              <button onClick={() => { setFilterSectors([]); setFilterPeriod('all'); }} className="flex-1 py-4 text-gray-600 font-bold text-lg bg-gray-100 rounded-xl">Limpar</button>
-              <button onClick={() => setShowFilters(false)} className="flex-2 w-2/3 py-4 text-white font-bold text-lg bg-blue-600 rounded-xl shadow-lg">Aplicar</button>
+        <FilterSheet title="Filtrar instruções" onClose={() => setShowFilters(false)} onClear={clearFilters}>
+          <div>
+            <label className="block text-sm font-black text-gray-500 mb-2 uppercase flex items-center"><Search size={16} className="mr-1" /> Busca</label>
+            <input
+              value={searchTerm}
+              onChange={e => setSearchTerm(e.target.value)}
+              className="w-full p-3 border-2 border-gray-200 rounded-lg outline-none focus:border-blue-500 font-bold text-gray-700"
+              placeholder="Título, descrição, setor ou funcionário"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-black text-gray-500 mb-2 uppercase flex items-center"><Calendar size={16} className="mr-1" /> Período</label>
+            <div className="grid grid-cols-3 gap-2">
+              <FilterOption active={filterPeriod === 'today'} onClick={() => setFilterPeriod('today')}>Hoje</FilterOption>
+              <FilterOption active={filterPeriod === '7days'} onClick={() => setFilterPeriod('7days')}>7 Dias</FilterOption>
+              <FilterOption active={filterPeriod === 'all'} onClick={() => setFilterPeriod('all')}>Todos</FilterOption>
             </div>
           </div>
-        </div>
+          {employeeOptions.length > 0 && (
+            <div>
+              <label className="block text-sm font-black text-gray-500 mb-2 uppercase flex items-center"><User size={16} className="mr-1" /> Funcionário</label>
+              <select
+                value={filterEmployee}
+                onChange={(e) => setFilterEmployee(e.target.value)}
+                className="w-full p-3 border-2 border-gray-200 rounded-lg bg-white font-bold text-gray-700 outline-none focus:border-blue-500"
+              >
+                <option value="">Todos</option>
+                {employeeOptions.map(name => <option key={name} value={name}>{name}</option>)}
+              </select>
+            </div>
+          )}
+          <div>
+            <label className="block text-sm font-black text-gray-500 mb-2 uppercase flex items-center"><LayoutGrid size={16} className="mr-1" /> Setores</label>
+            <div className="grid grid-cols-2 gap-2">
+              {SECTORS_LIST.map(s => (
+                <FilterOption
+                  key={s}
+                  active={filterSectors.includes(s)}
+                  onClick={() => toggleSectorFilter(s)}
+                  style={{ backgroundColor: getSectorColors(s).bg, color: getSectorColors(s).fg, borderColor: getSectorColors(s).border }}
+                >
+                  {s}
+                </FilterOption>
+              ))}
+            </div>
+          </div>
+          <div>
+            <label className="block text-sm font-black text-gray-500 mb-2 uppercase flex items-center"><Paperclip size={16} className="mr-1" /> Anexos</label>
+            <div className="grid grid-cols-3 gap-2">
+              <FilterOption active={filterMedia === 'all'} onClick={() => setFilterMedia('all')}>Todos</FilterOption>
+              <FilterOption active={filterMedia === 'with'} onClick={() => setFilterMedia('with')}>Com</FilterOption>
+              <FilterOption active={filterMedia === 'without'} onClick={() => setFilterMedia('without')}>Sem</FilterOption>
+            </div>
+          </div>
+        </FilterSheet>
       )}
 
       {viewingMedia && (

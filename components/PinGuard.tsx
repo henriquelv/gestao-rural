@@ -58,7 +58,6 @@ export const PinGuard: React.FC<PinGuardProps> = ({ children, title = "Acesso Re
                       DESBLOQUEAR <ArrowRight />
                   </button>
               </form>
-              <p className="text-center text-gray-400 text-xs mt-4">Dica: 1234</p>
           </div>
       </div>
     </Layout>

@@ -5,6 +5,7 @@ import { Layout } from '../../components/Layout';
 import { Header } from '../../components/Header';
 import { MicrophoneButton } from '../../components/MicrophoneButton';
 import { FieldLabel } from '../../components/FieldLabel';
+import { EmployeeConfirmField } from '../../components/EmployeeConfirmField';
 import { Camera, Video, Save, Clock, Trash2, FileText, Paperclip, Image as ImageIcon } from 'lucide-react';
 import { MediaItem, Employee } from '../../types';
 import { db } from '../../services/db.service';
@@ -12,6 +13,7 @@ import { notify } from '../../services/notification.service';
 import { validateFileSize } from '../../utils/media-compression';
 import { SECTORS_LIST, getSectorColors } from '../../constants/sectors';
 import { mediaService } from '../../services/media.service';
+import { farmContextService } from '../../services/farm-context.service';
 
 export const AddImprovementScreen: React.FC = () => {
   const navigate = useNavigate();
@@ -25,6 +27,7 @@ export const AddImprovementScreen: React.FC = () => {
   const [sector, setSector] = useState('');
   const [desc, setDesc] = useState('');
   const [media, setMedia] = useState<MediaItem[]>([]);
+  const selectedEmployee = employees.find(emp => emp.name === employee);
 
   const handleGalleryPick = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
@@ -41,6 +44,8 @@ export const AddImprovementScreen: React.FC = () => {
       const emps = await db.getEmployees();
       emps.sort((a, b) => a.name.localeCompare(b.name));
       setEmployees(emps);
+      const ctx = farmContextService.getContext();
+      if (ctx?.employee_name) setEmployee(ctx.employee_name);
       if (SECTORS_LIST.length > 0) setSector(SECTORS_LIST[0]);
     };
     load();
@@ -82,6 +87,8 @@ export const AddImprovementScreen: React.FC = () => {
       id: crypto.randomUUID(),
       createdAt: timestamp,
       employee,
+      employee_id: selectedEmployee?.id || farmContextService.getContext()?.employee_id,
+      employee_name: employee || farmContextService.getContext()?.employee_name,
       sector,
       description: desc,
       media
@@ -100,13 +107,13 @@ export const AddImprovementScreen: React.FC = () => {
       </div>
 
       <div className="flex-1 bg-white p-6 space-y-5 overflow-y-auto pb-10">
-        <div>
-          <FieldLabel label="Funcionário" />
-          <select value={employee} onChange={e => setEmployee(e.target.value)} className="w-full p-4 border border-gray-200 rounded-xl bg-gray-50 font-bold text-gray-700">
-            <option value="">Selecione...</option>
-            {employees.map((u) => <option key={u.id} value={u.name}>{u.name}</option>)}
-          </select>
-        </div>
+        <EmployeeConfirmField
+          label="Funcionário"
+          value={employee}
+          employees={employees}
+          onChange={setEmployee}
+          helpText="Nome usado no registro da melhoria."
+        />
 
         <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200">
           <FieldLabel label="Setor" />
