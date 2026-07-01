@@ -9,6 +9,7 @@ import { notify } from '../../services/notification.service';
 import { DailyMilk, DailyMetric } from '../../types';
 import { PinRequestModal } from '../../components/PinRequestModal';
 import { authService } from '../../services/auth.service';
+import { farmContextService } from '../../services/farm-context.service';
 
 interface DataMetricScreenProps {
   type: 'milk' | 'lactation' | 'discard' | 'births';
@@ -34,9 +35,11 @@ export const DataMetricScreen: React.FC<DataMetricScreenProps> = ({ type }) => {
   const [pendingReplaceAction, setPendingReplaceAction] = useState<(() => Promise<void>) | null>(null);
   const [showMonthPicker, setShowMonthPicker] = useState(false);
   
+  const MONTH_KEY = `selectedMonth_${farmContextService.getFarmId() || 'default'}`;
+
   // Inicializar monthPickerYear baseado no selectedMonth
   const [monthPickerYear, setMonthPickerYear] = useState(() => {
-    const saved = localStorage.getItem('selectedMonth');
+    const saved = localStorage.getItem(MONTH_KEY);
     if (saved) {
       const [y] = saved.split('-');
       return parseInt(y);
@@ -55,9 +58,9 @@ export const DataMetricScreen: React.FC<DataMetricScreenProps> = ({ type }) => {
   // Visualization mode: 'daily' or 'accumulated' (user toggle). Default from conf.accumulated
   const [vizMode, setVizMode] = useState<'daily' | 'accumulated'>(conf.accumulated ? 'accumulated' : 'daily');
   
-  // Filter by month (YYYY-MM). Default to current month. Persists across type changes.
+  // Filter by month (YYYY-MM). Default to current month. Persists per farm.
   const [selectedMonth, setSelectedMonth] = useState(() => {
-    const saved = localStorage.getItem('selectedMonth');
+    const saved = localStorage.getItem(MONTH_KEY);
     if (saved) return saved;
     const now = new Date();
     const y = now.getFullYear();
@@ -65,13 +68,12 @@ export const DataMetricScreen: React.FC<DataMetricScreenProps> = ({ type }) => {
     return `${y}-${m}`;
   });
 
-  // Persist selectedMonth to localStorage whenever it changes
+  // Persist selectedMonth to localStorage whenever it changes (keyed by farm)
   useEffect(() => {
-    localStorage.setItem('selectedMonth', selectedMonth);
-    // Sincronizar o ano do picker com o ano do selectedMonth
+    localStorage.setItem(MONTH_KEY, selectedMonth);
     const [y] = selectedMonth.split('-');
     setMonthPickerYear(parseInt(y));
-  }, [selectedMonth]);
+  }, [MONTH_KEY, selectedMonth]);
 
   useEffect(() => { load(); }, [type]);
 

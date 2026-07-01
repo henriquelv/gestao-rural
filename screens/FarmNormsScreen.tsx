@@ -3,12 +3,14 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { Layout } from '../components/Layout';
 import { Header } from '../components/Header';
 import { FieldLabel } from '../components/FieldLabel';
+import { EmployeeConfirmField } from '../components/EmployeeConfirmField';
 import { MicrophoneButton } from '../components/MicrophoneButton';
 import { FileText, Upload, CheckCircle, Save, Clock, Paperclip, Trash2, AlertTriangle, Presentation } from 'lucide-react';
 import { db } from '../services/db.service';
 import { FarmDoc, MediaItem } from '../types';
 import { notify } from '../services/notification.service';
 import { mediaService } from '../services/media.service';
+import { farmContextService } from '../services/farm-context.service';
 
 export const FarmNormsScreen: React.FC = () => {
   const navigate = useNavigate();
@@ -24,12 +26,15 @@ export const FarmNormsScreen: React.FC = () => {
   const [sector, setSector] = useState<string>('');
   const [docFile, setDocFile] = useState<MediaItem | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const selectedEmployee = employees.find(emp => emp.name === responsible);
 
   useEffect(() => { 
       const load = async () => {
           const emps = await db.getEmployees();
           emps.sort((a, b) => a.name.localeCompare(b.name));
           setEmployees(emps);
+          const ctx = farmContextService.getContext();
+          if (ctx?.employee_name) setResponsible(ctx.employee_name);
           const s = await db.getSectors();
           setSectors(s);
           if(s.length > 0) setSector(s[0]);
@@ -79,6 +84,8 @@ export const FarmNormsScreen: React.FC = () => {
             title: title,
             sector: sector,
             responsible: responsible,
+            employee_id: selectedEmployee?.id || farmContextService.getContext()?.employee_id,
+            employee_name: responsible || farmContextService.getContext()?.employee_name,
             updatedAt: timestamp, 
             media: docFile
         };
@@ -105,13 +112,13 @@ export const FarmNormsScreen: React.FC = () => {
 
       <div className="flex-1 bg-white p-6 space-y-6 overflow-y-auto pb-10">
         
-        <div>
-           <FieldLabel label="Responsável" helpText="Quem está criando a norma?" />
-           <select value={responsible} onChange={e => setResponsible(e.target.value)} className="w-full p-4 border border-gray-200 rounded-xl bg-gray-50 font-bold text-gray-700 outline-none focus:border-blue-500">
-                <option value="">Selecione...</option>
-                {employees.map((u) => <option key={u.id} value={u.name}>{u.name}</option>)}
-           </select>
-        </div>
+        <EmployeeConfirmField
+          label="Responsável"
+          value={responsible}
+          employees={employees}
+          onChange={setResponsible}
+          helpText="Nome do responsável pela criação da norma."
+        />
 
         <div>
             <FieldLabel label="Título do Documento" />

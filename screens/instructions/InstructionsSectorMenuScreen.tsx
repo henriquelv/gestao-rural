@@ -1,7 +1,6 @@
-
 import React from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Plus, List } from 'lucide-react';
+import { Plus, List as ListIcon } from 'lucide-react';
 import { Layout } from '../../components/Layout';
 import { Header } from '../../components/Header';
 import { BigButton } from '../../components/BigButton';
@@ -17,9 +16,9 @@ const slugToSector = (slug: string): SectorType | null => {
 export const InstructionsSectorMenuScreen: React.FC = () => {
   const navigate = useNavigate();
   const { sector: sectorSlug } = useParams<{ sector: string }>();
-  
   const sector = sectorSlug ? slugToSector(sectorSlug) : null;
-  
+
+
   if (!sector) {
     return (
       <Layout>
@@ -42,26 +41,22 @@ export const InstructionsSectorMenuScreen: React.FC = () => {
   };
 
   const handleList = () => {
-    navigate('/instructions/list', { 
-      state: { 
-        selectedSector: sector
-      } 
-    });
+    navigate('/instructions/list', { state: { selectedSector: sector } });
   };
 
   return (
     <Layout>
       <Header title={sector} targetRoute="/instructions" />
-      <div className="flex-1 p-6 flex flex-col gap-6 bg-gray-50 pt-8">
-        <BigButton 
-          icon={Plus} 
-          label="Adicionar Instrução" 
+      <div className="flex-1 p-6 flex flex-col gap-6 bg-gradient-to-br from-gray-50 to-gray-200 pt-8">
+        <BigButton
+          icon={Plus}
+          label="Adicionar Instrução"
           onClick={handleAdd}
           color="green"
         />
-        <BigButton 
-          icon={List} 
-          label="Lista de Instruções" 
+        <BigButton
+          icon={ListIcon}
+          label="Lista de Instruções"
           onClick={handleList}
           color="blue"
         />

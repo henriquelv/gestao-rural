@@ -23,7 +23,7 @@ export const StandardDocScreen: React.FC = () => {
   const [viewingUrl, setViewingUrl] = useState<string>('');
   const [viewingZoom, setViewingZoom] = useState(1);
 
-  const viewingZoomGestures = useImageZoom((newZoom) => setViewingZoom(newZoom));
+  const viewingZoomGestures = useImageZoom();
 
   useEffect(() => {
     loadDoc();
@@ -107,13 +107,6 @@ export const StandardDocScreen: React.FC = () => {
                   <p className="text-[10px] text-gray-400">{new Date(currentDoc.updatedAt).toLocaleDateString()}</p>
                 </div>
                 <div className="flex items-center gap-2">
-                  {currentDoc.media.type === 'photo' && (
-                    <div className="flex items-center gap-2">
-                      <button onClick={() => setViewingZoom(Math.max(1, viewingZoom - 0.25))} className="p-2 bg-gray-100 rounded-full">−</button>
-                      <span className="text-sm font-bold w-12 text-center">{Math.round(viewingZoom * 100)}%</span>
-                      <button onClick={() => setViewingZoom(Math.min(3, viewingZoom + 0.25))} className="p-2 bg-gray-100 rounded-full">+</button>
-                    </div>
-                  )}
                 </div>
               </div>
 
@@ -122,8 +115,8 @@ export const StandardDocScreen: React.FC = () => {
                   <div className="flex items-center justify-center p-2 relative overflow-auto" style={{ maxHeight: '70vh' }}>
                     <img
                       src={viewingUrl || currentDoc.media.remoteUrl || currentDoc.media.uri}
-                      className="object-contain select-none touch-none"
-                      style={{ transform: `scale(${viewingZoom})`, maxWidth: '100%', maxHeight: '70vh' }}
+                      className="object-contain"
+                      style={viewingZoomGestures.imageStyle}
                       onTouchStart={viewingZoomGestures.handleTouchStart}
                       onTouchMove={viewingZoomGestures.handleTouchMove}
                       onTouchEnd={viewingZoomGestures.handleTouchEnd}

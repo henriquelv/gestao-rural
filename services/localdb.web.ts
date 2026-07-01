@@ -37,6 +37,7 @@ export class WebFarmDatabase extends Dexie {
   farm_docs!: Table<LocalRecord>;
   daily_metrics!: Table<LocalRecord>;
   milk_daily!: Table<LocalRecord>;
+  farm_monthly_stats!: Table<LocalRecord>;
   outbox!: Table<OutboxItem>;
   media_blobs!: Table<MediaBlobRecord>;
 
@@ -56,6 +57,10 @@ export class WebFarmDatabase extends Dexie {
       milk_daily: 'id, synced, updated_at',
       outbox: '++id, status, created_at',
       media_blobs: 'id'
+    });
+    // v2: adiciona farm_monthly_stats que estava ausente no schema original
+    (this as any).version(2).stores({
+      farm_monthly_stats: 'id, synced, updated_at'
     });
   }
 }

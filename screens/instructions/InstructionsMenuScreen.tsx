@@ -1,66 +1,48 @@
-
-import React from 'react';
+import React, { useEffect, useState } from 'react';
+import { Filter, X, Calendar, LayoutGrid, List as ListIcon, Table as TableIcon, FileText, Video, Download, Presentation, Image as ImageIcon } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { BookOpen, Beef, Apple, Sofa, Truck, Baby, Wrench } from 'lucide-react';
 import { Layout } from '../../components/Layout';
 import { Header } from '../../components/Header';
 import { BigButton } from '../../components/BigButton';
-import { SECTORS_LIST, SectorType, getSectorColors } from '../../constants/sectors';
-
-// Mapa de ícones para cada setor
-const sectorIcons: Record<SectorType, any> = {
-  'Ordenha': BookOpen,
-  'Manejo': Wrench,
-  'Alimentação': Apple,
-  'Conforto': Sofa,
-  'Serviços Externos': Truck,
-  'Maternidade': Baby,
-  'Criação': Beef,
-  'Administração': BookOpen,
-};
-
-// Mapa de cores do setor para cores do BigButton
-const sectorColorMap: Record<SectorType, string> = {
-  'Ordenha': 'blue',
-  'Manejo': 'orange',
-  'Alimentação': 'green',
-  'Conforto': 'purple',
-  'Serviços Externos': 'yellow',
-  'Maternidade': 'pink',
-  'Criação': 'red',
-  'Administração': 'slate',
-};
+import { db } from '../../services/db.service';
+import { UIConfig } from '../../types';
 
 export const InstructionsMenuScreen: React.FC = () => {
   const navigate = useNavigate();
+  const [ui, setUi] = useState<UIConfig | null>(null);
 
-  const handleSectorSelect = (sector: SectorType) => {
-    navigate(`/instructions/${sector.replace(/\s+/g, '-').toLowerCase()}`);
+  useEffect(() => {
+    db.getUIConfig().then(setUi);
+  }, []);
+
+  if (!ui) return null;
+
+  const buttons = ui.buttons
+    .filter(b => b.screen === 'instructions_menu' && b.visible)
+    .sort((a, b) => a.order - b.order);
+
+  const handleNavigate = (route: string) => {
+    navigate(route);
   };
 
   return (
     <Layout>
-      <Header title="Instruções" targetRoute="/" />
-      
-      <div className="flex-1 p-6 bg-gray-100 pt-8 overflow-y-auto">
-        <div className="grid grid-cols-2 gap-4">
-          {SECTORS_LIST.map(sector => {
-            const IconComponent = sectorIcons[sector] || BookOpen;
-            const buttonColor = sectorColorMap[sector] || 'blue';
-            
-            return (
+      <Header title="Instruções de Trabalho" targetRoute="/" />
+
+      <div className="flex-1 px-4 py-8 overflow-y-auto pb-32 bg-gradient-to-br from-gray-50 to-gray-200">
+        <div className="grid grid-cols-2 gap-3 content-start">
+          {buttons.map(btn => (
+            <div key={btn.id}>
               <BigButton
-                key={sector}
-                icon={IconComponent}
-                label={sector}
-                color={buttonColor}
-                onClick={() => handleSectorSelect(sector)}
-                fullWidth={false}
+                icon={btn.iconValue}
+                iconType={btn.iconType}
+                label={btn.label}
+                color={btn.color}
+                onClick={() => handleNavigate(btn.route)}
               />
-            );
-          })}
+            </div>
+          ))}
         </div>
-        <p className="text-center text-gray-400 mt-8 text-xs">Selecione um setor.</p>
       </div>
     </Layout>
   );

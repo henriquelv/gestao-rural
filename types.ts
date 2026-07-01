@@ -22,6 +22,56 @@ export interface MediaItem {
   remotePath?: string;
   remoteUrl?: string;
   uri?: string;
+  pendingUpload?: boolean;
+}
+
+export interface Farm {
+  id: string;
+  name: string;
+  status: 'active' | 'blocked' | 'expired' | string;
+  activation_code?: string;
+  max_devices?: number;
+  grace_period_days?: number;
+  expires_at?: string | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface License {
+  id: string;
+  farm_id: string;
+  status: 'active' | 'blocked' | 'expired' | string;
+  starts_at?: string;
+  expires_at?: string | null;
+  notes?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface DeviceRegistration {
+  id?: string;
+  farm_id: string;
+  employee_id: string;
+  device_id: string;
+  device_name?: string;
+  platform?: string;
+  status: 'active' | 'blocked' | string;
+  first_seen_at?: string;
+  last_seen_at?: string;
+}
+
+export interface AppActivationContext {
+  farm_id: string;
+  farm_name: string;
+  employee_id: string;
+  employee_name: string;
+  device_id: string;
+  last_license_check_at?: string;
+  license_status?: string;
+  device_status?: string;
+  grace_period_days?: number;
+  is_owner?: boolean;
+  admin_pin?: string;
 }
 
 export interface FarmSettings {
@@ -64,6 +114,9 @@ export interface UIConfig {
 
 export interface Anomaly {
   id: string;
+  farm_id?: string;
+  employee_id?: string;
+  employee_name?: string;
   createdAt: string;
   responsible: string;
   sector: string; 
@@ -76,6 +129,9 @@ export interface Anomaly {
 
 export interface Instruction {
   id: string;
+  farm_id?: string;
+  employee_id?: string;
+  employee_name?: string;
   createdAt: string;
   title: string;
   sector: string;
@@ -85,6 +141,9 @@ export interface Instruction {
 
 export interface Notice {
   id: string;
+  farm_id?: string;
+  employee_id?: string;
+  employee_name?: string;
   createdAt: string;
   responsible: string;
   content: string;
@@ -93,6 +152,9 @@ export interface Notice {
 
 export interface Improvement {
   id: string;
+  farm_id?: string;
+  employee_id?: string;
+  employee_name?: string;
   createdAt: string;
   employee: string;
   sector: string;
@@ -102,6 +164,9 @@ export interface Improvement {
 
 export interface FarmDoc {
   id: string; 
+  farm_id?: string;
+  employee_id?: string;
+  employee_name?: string;
   updatedAt: string;
   title: string; 
   sector: string; 
@@ -110,17 +175,20 @@ export interface FarmDoc {
 }
 
 export interface DailyMilk {
+  farm_id?: string;
   date: string; 
   liters: number;
 }
 
 export interface DailyMetric {
+  farm_id?: string;
   date: string;
   type: 'lactation' | 'discard' | 'births';
   value: number;
 }
 
 export interface MonthlyStats {
+  farm_id?: string;
   monthKey: string; 
   lactatingCows: number;
   discardedCows: number;
@@ -129,9 +197,15 @@ export interface MonthlyStats {
 
 export interface Employee {
   id: string;
+  farm_id?: string;
   name: string;
   role: string;
+  status?: string;
+  created_at?: string;
+  updated_at?: string;
   photoUri?: string;
+  is_admin?: boolean;
+  admin_pin?: string;
 }
 
 export type RootStackParamList = {

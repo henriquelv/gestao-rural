@@ -41,8 +41,18 @@ export const localdb = {
       return await nativeDB.get(tableName, id);
     }
     // @ts-ignore
-    const record = await webDB[tableName].get(id);
+    const record = await webDB[tableName]?.get(id);
     return record ? record.data : null;
+  },
+
+  async getRawById(tableName: string, id: string): Promise<{ id: string; synced: boolean; data: any } | null> {
+    if (isNative) {
+      return await nativeDB.getRawById(tableName, id);
+    }
+    // @ts-ignore
+    const record = await webDB[tableName]?.get(id);
+    if (!record) return null;
+    return { id: record.id, synced: !!record.synced, data: record.data };
   },
 
   async count(tableName: string): Promise<number> {
@@ -94,7 +104,9 @@ export const localdb = {
     // @ts-ignore
     const table = webDB[tableName];
     if (!table) return [];
-    const records = await table.where('synced').equals(0).toArray();
+    const records = await table
+      .filter((record: LocalRecord) => record.synced === false || (record.synced as any) === 0)
+      .toArray();
     return records.map((r: any) => ({ id: r.id, data: r.data }));
   },
 
@@ -151,6 +163,15 @@ export const localdb = {
     await webDB.outbox.update(id, { status: 'error', errorMessage: msg });
   },
 
+  async updateOutboxPayload(id: number, payload: any): Promise<void> {
+    if (isNative) {
+      // @ts-ignore
+      await nativeDB.updateOutboxPayload(id, payload);
+      return;
+    }
+    await webDB.outbox.update(id, { payload });
+  },
+
   async retryOutboxItem(id: number): Promise<void> {
     if (isNative) {
       // @ts-ignore
@@ -168,5 +189,19 @@ export const localdb = {
     }
     const errs = await webDB.outbox.where('status').equals('error').toArray();
     await Promise.all(errs.map((e) => webDB.outbox.update(e.id as number, { status: 'pending', errorMessage: undefined })));
+  },
+
+  async getOutboxSummary(): Promise<{ total: number; pending: number; errors: number; lastError: any | null }> {
+    if (isNative) {
+      // @ts-ignore
+      return await nativeDB.getOutboxSummary();
+    }
+    const [pending, errors, all] = await Promise.all([
+      webDB.outbox.where('status').equals('pending').count(),
+      webDB.outbox.where('status').equals('error').count(),
+      webDB.outbox.count()
+    ]);
+    const lastError = await webDB.outbox.where('status').equals('error').reverse().first();
+    return { total: all, pending, errors, lastError: lastError || null };
   }
 };

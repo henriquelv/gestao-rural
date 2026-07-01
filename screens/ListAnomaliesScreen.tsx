@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Filter, X, Image as ImageIcon, Video, Calendar, User, LayoutGrid, List as ListIcon, Table as TableIcon, ArrowUpDown, ArrowUp, ArrowDown, CheckCircle } from 'lucide-react';
 import { Layout } from '../components/Layout';
@@ -10,6 +10,7 @@ import { localdb } from '../services/localdb';
 import { notify } from '../services/notification.service';
 import { SECTORS_LIST, SectorType, getSectorColors } from '../constants/sectors';
 import { mediaService } from '../services/media.service';
+import { getAnomalyDate, getAnomalyTime, isAnomalyInDateRange } from '../utils/anomaly-months';
 
 // Responsáveis são derivados dos dados atuais para manter filtros atualizados
 
@@ -21,8 +22,9 @@ export const ListAnomaliesScreen: React.FC = () => {
   const navigate = useNavigate();
   const [items, setItems] = useState<Anomaly[]>([]);
   const [photoUrls, setPhotoUrls] = useState<Record<string, string>>({});
+  const loadingRef = useRef(false);
   const [showFilters, setShowFilters] = useState(false);
-  
+
   // View Mode: 'list' | 'grid' | 'table'
   const [viewMode, setViewMode] = useState<'list' | 'grid' | 'table'>('list');
 
@@ -31,7 +33,7 @@ export const ListAnomaliesScreen: React.FC = () => {
   const [filterResponsible, setFilterResponsible] = useState('');
   const [filterPeriod, setFilterPeriod] = useState<'today' | '7days' | '30days' | 'all' | 'custom'>('all');
   const [filterResolved, setFilterResolved] = useState<ResolvedStatus>('all');
-  
+
   // Custom Date Range
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
@@ -42,17 +44,31 @@ export const ListAnomaliesScreen: React.FC = () => {
 
   useEffect(() => {
     loadData();
-    const unsub = localdb.subscribe('anomalies', () => {
-      loadData();
+    loadPhotos();
+    // Subscriber: atualiza items reativamente sem bloquear por loadingRef
+    // (o background refresh do smartRead notifica via notifyChange após bulkPut)
+    const unsub = localdb.subscribe('anomalies', async () => {
+      const data = await db.getAnomalies();
+      setItems(data);
     });
     return () => unsub && unsub();
   }, []);
 
   const loadData = async () => {
+    if (loadingRef.current) return;
+    loadingRef.current = true;
+    try {
+      // smartRead já faz stale-while-revalidate: retorna cache local imediatamente
+      // e atualiza em background na primeira leitura da sessão.
+      const data = await db.getAnomalies();
+      setItems(data);
+    } finally {
+      loadingRef.current = false;
+    }
+  };
+
+  const loadPhotos = async () => {
     const data = await db.getAnomalies();
-    setItems(data);
-    
-    // Carregar URLs das fotos
     const urls: Record<string, string> = {};
     for (const item of data) {
       const photo = item.media?.find(m => m.type === 'photo');
@@ -85,37 +101,31 @@ export const ListAnomaliesScreen: React.FC = () => {
 
   const filteredItems = useMemo(() => {
     let result = [...items];
-    
+
     // Filters
     if (filterSectors.length > 0) result = result.filter(i => filterSectors.includes(i.sector as SectorType));
     if (filterResponsible) result = result.filter(i => i.responsible.toLowerCase().includes(filterResponsible.toLowerCase()));
-    
+
     // Filter por Status de Resolução
     if (filterResolved === 'resolved') {
       result = result.filter(i => i.resolvedAt !== undefined && i.resolvedAt !== null);
     } else if (filterResolved === 'unresolved') {
       result = result.filter(i => !i.resolvedAt || i.resolvedAt === null);
     }
-    
+
     const now = new Date();
     const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    
+
     if (filterPeriod === 'today') {
-        result = result.filter(i => new Date(i.createdAt) >= todayStart);
+        result = result.filter(i => getAnomalyTime(i.createdAt) >= todayStart.getTime());
     } else if (filterPeriod === '7days') {
         const cutoff = new Date(now); cutoff.setDate(cutoff.getDate() - 7);
-        result = result.filter(i => new Date(i.createdAt) >= cutoff);
+        result = result.filter(i => getAnomalyTime(i.createdAt) >= cutoff.getTime());
     } else if (filterPeriod === '30days') {
         const cutoff = new Date(now); cutoff.setDate(cutoff.getDate() - 30);
-        result = result.filter(i => new Date(i.createdAt) >= cutoff);
+        result = result.filter(i => getAnomalyTime(i.createdAt) >= cutoff.getTime());
     } else if (filterPeriod === 'custom' && startDate && endDate) {
-        const start = new Date(startDate);
-        const end = new Date(endDate);
-        end.setHours(23, 59, 59); // Include full end day
-        result = result.filter(i => {
-            const d = new Date(i.createdAt);
-            return d >= start && d <= end;
-        });
+        result = result.filter(i => isAnomalyInDateRange(i.createdAt, startDate, endDate));
     }
 
     // Sorting
@@ -124,8 +134,8 @@ export const ListAnomaliesScreen: React.FC = () => {
         let valB: any = b[sortField];
 
         if (sortField === 'createdAt') {
-            valA = new Date(valA).getTime();
-            valB = new Date(valB).getTime();
+            valA = getAnomalyTime(valA);
+            valB = getAnomalyTime(valB);
         } else {
             valA = valA.toString().toLowerCase();
             valB = valB.toString().toLowerCase();
@@ -136,28 +146,28 @@ export const ListAnomaliesScreen: React.FC = () => {
         return 0;
     });
 
-    return result.slice(0, 100); // Pagination limit
+    return result;
   }, [items, filterSectors, filterResponsible, filterPeriod, filterResolved, startDate, endDate, sortField, sortOrder]);
 
   const activeFiltersCount = filterSectors.length + (filterResponsible ? 1 : 0) + (filterPeriod !== 'all' ? 1 : 0) + (filterResolved !== 'all' ? 1 : 0);
-  const clearFilters = () => { 
-      setFilterSectors([]); 
-      setFilterResponsible(''); 
-      setFilterPeriod('all'); 
+  const clearFilters = () => {
+      setFilterSectors([]);
+      setFilterResponsible('');
+      setFilterPeriod('all');
       setFilterResolved('all');
       setStartDate('');
       setEndDate('');
-      setShowFilters(false); 
+      setShowFilters(false);
   };
 
   return (
     <Layout>
       <Header title="Lista de Anomalias" targetRoute="/anomalies" />
-      
+
       {/* TOOLBAR */}
       <div className="bg-white border-b border-gray-200 p-2 shadow-sm z-10 sticky top-16 flex flex-col gap-2">
         <div className="flex gap-2">
-            <button 
+            <button
             onClick={() => setShowFilters(true)}
             className={`flex-1 flex items-center justify-center px-4 py-3 rounded-lg font-bold border-2 transition-colors ${activeFiltersCount > 0 ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-200'}`}
             >
@@ -168,19 +178,19 @@ export const ListAnomaliesScreen: React.FC = () => {
 
         {/* Intuitve View Toggles */}
         <div className="flex bg-gray-100 p-1 rounded-lg border border-gray-200">
-            <button 
+            <button
                 onClick={() => setViewMode('list')}
                 className={`flex-1 flex items-center justify-center py-2 rounded-md transition-all text-xs font-bold uppercase ${viewMode === 'list' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}
             >
                 <ListIcon size={16} className="mr-1" /> Lista
             </button>
-            <button 
+            <button
                 onClick={() => setViewMode('grid')}
                 className={`flex-1 flex items-center justify-center py-2 rounded-md transition-all text-xs font-bold uppercase ${viewMode === 'grid' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}
             >
                 <LayoutGrid size={16} className="mr-1" /> Grade
             </button>
-            <button 
+            <button
                 onClick={() => setViewMode('table')}
                 className={`flex-1 flex items-center justify-center py-2 rounded-md transition-all text-xs font-bold uppercase ${viewMode === 'table' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}
             >
@@ -191,6 +201,14 @@ export const ListAnomaliesScreen: React.FC = () => {
 
       {/* CONTENT */}
       <div className="flex-1 overflow-y-auto bg-gray-100 p-3">
+        <div className="mb-3 rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-bold text-gray-600">
+          Mostrando {filteredItems.length} de {items.length} anomalias
+          {activeFiltersCount > 0 && (
+            <button onClick={clearFilters} className="ml-2 font-black text-blue-700 underline">
+              limpar filtros
+            </button>
+          )}
+        </div>
         {filteredItems.length === 0 && <div className="text-center p-10 text-gray-400">Nenhum registro encontrado.</div>}
 
         {viewMode === 'table' ? (
@@ -199,19 +217,19 @@ export const ListAnomaliesScreen: React.FC = () => {
                      <table className="w-full text-sm text-left text-gray-500">
                          <thead className="text-xs text-gray-700 uppercase bg-gray-50 border-b">
                              <tr>
-                                 <th 
-                                    className="px-3 py-3 whitespace-nowrap cursor-pointer hover:bg-gray-100 select-none" 
+                                 <th
+                                    className="px-3 py-3 whitespace-nowrap cursor-pointer hover:bg-gray-100 select-none"
                                     onClick={() => handleSort('createdAt')}
                                  >
                                     <div className="flex items-center">Data {getSortIcon('createdAt')}</div>
                                  </th>
-                                 <th 
+                                 <th
                                     className="px-3 py-3 whitespace-nowrap cursor-pointer hover:bg-gray-100 select-none"
                                     onClick={() => handleSort('sector')}
                                  >
                                     <div className="flex items-center">Setor {getSortIcon('sector')}</div>
                                  </th>
-                                 <th 
+                                 <th
                                     className="px-3 py-3 whitespace-nowrap cursor-pointer hover:bg-gray-100 select-none"
                                     onClick={() => handleSort('responsible')}
                                  >
@@ -222,13 +240,13 @@ export const ListAnomaliesScreen: React.FC = () => {
                          </thead>
                          <tbody>
                              {filteredItems.map(item => (
-                                 <tr 
-                                    key={item.id} 
+                                 <tr
+                                    key={item.id}
                                     onClick={() => navigate(`/anomalies/detail/${item.id}`)}
                                     className="bg-white border-b hover:bg-gray-50 active:bg-blue-50 cursor-pointer"
                                  >
                                      <td className="px-3 py-2 whitespace-nowrap font-medium text-gray-900">
-                                        {new Date(item.createdAt).toLocaleDateString('pt-BR', {day:'2-digit', month:'2-digit'})}
+                                        {getAnomalyDate(item.createdAt)?.toLocaleDateString('pt-BR', {day:'2-digit', month:'2-digit'}) || '-'}
                                      </td>
                                      <td className="px-3 py-2 whitespace-nowrap">
                                          <span
@@ -252,10 +270,10 @@ export const ListAnomaliesScreen: React.FC = () => {
                     const photo = item.media.find(m => m.type === 'photo');
                     const hasVideo = item.media.some(m => m.type === 'video');
                     const photoUrl = photoUrls[item.id] || (photo ? mediaService.getRemoteUrl(photo) : '');
-                    
+
                     return (
-                    <div 
-                        key={item.id} 
+                    <div
+                        key={item.id}
                         onClick={() => navigate(`/anomalies/detail/${item.id}`)}
                         className={`bg-white rounded-xl shadow-sm border-gray-200 overflow-hidden active:opacity-90 transition-opacity relative ${viewMode === 'list' ? 'border-l-8 p-4' : 'border'}`}
                         style={viewMode === 'list' ? { borderLeftColor: getSectorColors(item.sector).border } : undefined}
@@ -287,7 +305,7 @@ export const ListAnomaliesScreen: React.FC = () => {
                                 )}
                                 {hasVideo && <div className="absolute top-2 right-2 bg-purple-600 text-white p-1 rounded-full"><Video size={10}/></div>}
                                 <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent p-1">
-                                    <span className="text-white text-[10px] font-bold">{new Date(item.createdAt).toLocaleDateString('pt-BR')}</span>
+                                    <span className="text-white text-[10px] font-bold">{getAnomalyDate(item.createdAt)?.toLocaleDateString('pt-BR') || '-'}</span>
                                 </div>
                             </div>
                         )}
@@ -296,7 +314,7 @@ export const ListAnomaliesScreen: React.FC = () => {
                             {viewMode === 'list' && (
                                 <div className="flex justify-between items-start mb-2">
                                     <span className="text-lg font-black text-gray-800">
-                                        {new Date(item.createdAt).toLocaleDateString('pt-BR')} 
+                                        {getAnomalyDate(item.createdAt)?.toLocaleDateString('pt-BR') || '-'}
                                     </span>
                                     <div className="flex gap-2">
                                         {photo && <ImageIcon size={20} className="text-blue-500"/>}
@@ -304,7 +322,7 @@ export const ListAnomaliesScreen: React.FC = () => {
                                     </div>
                                 </div>
                             )}
-                            
+
                             {viewMode === 'grid' ? (
                                 <>
                                     <div>
@@ -330,7 +348,7 @@ export const ListAnomaliesScreen: React.FC = () => {
                                     </span>
                                 </div>
                             )}
-                            
+
                             {viewMode === 'list' && <p className="text-sm text-gray-600 line-clamp-2">{item.description}</p>}
                         </div>
                     </div>
@@ -357,9 +375,9 @@ export const ListAnomaliesScreen: React.FC = () => {
                     <button onClick={() => setFilterPeriod('30days')} className={`p-3 rounded-lg font-bold border-2 ${filterPeriod === '30days' ? 'bg-blue-600 text-white' : 'bg-white text-gray-600'}`}>30 Dias</button>
                     <button onClick={() => setFilterPeriod('all')} className={`p-3 rounded-lg font-bold border-2 ${filterPeriod === 'all' ? 'bg-blue-600 text-white' : 'bg-white text-gray-600'}`}>Todos</button>
                 </div>
-                
-                <button 
-                  onClick={() => setFilterPeriod('custom')} 
+
+                <button
+                  onClick={() => setFilterPeriod('custom')}
                   className={`w-full p-3 rounded-lg font-bold border-2 mb-2 ${filterPeriod === 'custom' ? 'bg-blue-600 text-white' : 'bg-white text-gray-600'}`}
                 >
                   Personalizado
@@ -412,19 +430,19 @@ export const ListAnomaliesScreen: React.FC = () => {
               <div>
                 <label className="block text-sm font-bold text-gray-500 mb-2 uppercase flex items-center"><CheckCircle size={16} className="mr-1"/> Status de Resolução</label>
                 <div className="grid grid-cols-3 gap-2">
-                    <button 
+                    <button
                       onClick={() => setFilterResolved('all')}
                       className={`p-3 rounded-lg font-bold border-2 text-sm ${filterResolved === 'all' ? 'bg-blue-600 text-white' : 'bg-white text-gray-600'}`}
                     >
                       Todos
                     </button>
-                    <button 
+                    <button
                       onClick={() => setFilterResolved('resolved')}
                       className={`p-3 rounded-lg font-bold border-2 text-sm ${filterResolved === 'resolved' ? 'bg-green-600 text-white' : 'bg-white text-gray-600'}`}
                     >
                       Resolvidas
                     </button>
-                    <button 
+                    <button
                       onClick={() => setFilterResolved('unresolved')}
                       className={`p-3 rounded-lg font-bold border-2 text-sm ${filterResolved === 'unresolved' ? 'bg-orange-600 text-white' : 'bg-white text-gray-600'}`}
                     >

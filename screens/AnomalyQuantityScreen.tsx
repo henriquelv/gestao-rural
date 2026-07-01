@@ -4,11 +4,10 @@ import { Header } from '../components/Header';
 import { db } from '../services/db.service';
 import { localdb } from '../services/localdb';
 import { notify } from '../services/notification.service';
-import { authService } from '../services/auth.service';
-import { PinRequestModal } from '../components/PinRequestModal';
 import { Anomaly } from '../types';
 import { SectorType, DEFAULT_SECTOR_BASE_COLOR, SECTORS_LIST } from '../constants/sectors';
-import { Filter, BarChart3, Lock, TrendingUp, X, Calendar, ChevronDown, ChevronUp } from 'lucide-react';
+import { Filter, TrendingUp, X, Calendar, ChevronDown, ChevronUp, ChevronLeft, ChevronRight } from 'lucide-react';
+import { getAnomalyDateParts, groupAnomaliesByMonth, isAnomalyInDateRange } from '../utils/anomaly-months';
 
 interface MonthData {
   month: string;
@@ -20,16 +19,14 @@ type ViewMode = 'chart' | 'table' | 'period';
 
 export const AnomalyQuantityScreen: React.FC = () => {
   const [anomalies, setAnomalies] = useState<Anomaly[]>([]);
-  const [showPinModal, setShowPinModal] = useState(false);
-  const [accessGranted, setAccessGranted] = useState(false);
   const [closedMonths, setClosedMonths] = useState<Record<string, Record<SectorType, number>>>({});
   
   // Filtros
   const [filtersOpen, setFiltersOpen] = useState(false);
-  const [monthsToShow, setMonthsToShow] = useState(12);
+  const [selectedYear, setSelectedYear] = useState(() => new Date().getFullYear());
   const [selectedSector, setSelectedSector] = useState<SectorType | 'all'>('all');
   const [viewMode, setViewMode] = useState<ViewMode>('chart');
-  const [startDate, setStartDate] = useState('2026-01-01');
+  const [startDate, setStartDate] = useState(() => `${new Date().getFullYear()}-01-01`);
   const [endDate, setEndDate] = useState(() => {
     const now = new Date();
     const y = now.getFullYear();
@@ -59,22 +56,6 @@ export const AnomalyQuantityScreen: React.FC = () => {
     }
   }, [closedMonths]);
 
-  // Verificar autenticação
-  useEffect(() => {
-    if (!authService.isAuthenticated()) {
-      setShowPinModal(true);
-    } else {
-      setAccessGranted(true);
-      loadAnomalies();
-    }
-  }, []);
-
-  const handlePinSuccess = () => {
-    setAccessGranted(true);
-    setShowPinModal(false);
-    loadAnomalies();
-  };
-
   const loadAnomalies = async () => {
     try {
       const data = await db.getAnomalies();
@@ -85,100 +66,22 @@ export const AnomalyQuantityScreen: React.FC = () => {
     }
   };
 
-  // Subscribe para atualização automática
   useEffect(() => {
-    if (!accessGranted) return;
-    
-    const unsub = localdb.subscribe('anomalies', () => {
-      loadAnomalies();
-    });
-
-    return () => unsub && unsub();
-  }, [accessGranted]);
+    loadAnomalies();
+    const unsub = localdb.subscribe('anomalies', loadAnomalies);
+    return () => unsub?.();
+  }, []);
 
   // Filtrar anomalias por período
   const filteredByPeriod = anomalies.filter(a => {
-    const aDate = new Date(a.createdAt);
-    const start = new Date(startDate);
-    const end = new Date(endDate);
-    end.setHours(23, 59, 59);
-    return aDate >= start && aDate <= end;
+    return isAnomalyInDateRange(a.createdAt, startDate, endDate);
   });
 
-  // Gerar dados por mês (com meses fechados imutáveis)
+  const annualAnomalies = anomalies.filter((a) => getAnomalyDateParts(a.createdAt)?.year === selectedYear);
+
+  // Gerar dados por mês: sempre janeiro a dezembro, com zero quando nao houver registros.
   const getMonthlyData = (): MonthData[] => {
-    const now = new Date();
-    const months: MonthData[] = [];
-
-    const startYear = 2026;
-    const startMonth = 0; // Janeiro
-    const currentYear = now.getFullYear();
-    const currentMonth = now.getMonth();
-    const currentDay = now.getDate();
-
-    for (let y = startYear; y <= currentYear; y++) {
-      const startM = y === startYear ? startMonth : 0;
-      const endM = y === currentYear ? currentMonth : 11;
-
-      for (let m = startM; m <= endM; m++) {
-        const date = new Date(y, m, 1);
-        const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
-        
-        // Se o mês está fechado (é mês passado ou anterior), usar dados salvos se existirem
-        const isMêsPassado = (y < currentYear) || (y === currentYear && m < currentMonth);
-        
-        let bySetor: Record<SectorType, number>;
-
-        // Sempre calcular a partir das anomalias para ter dados atualizados
-        const startOfMonth = new Date(date.getFullYear(), date.getMonth(), 1);
-        startOfMonth.setHours(0, 0, 0, 0);
-        const endOfMonth = new Date(date.getFullYear(), date.getMonth() + 1, 0);
-        endOfMonth.setHours(23, 59, 59, 999);
-
-        const monthAnomalies = anomalies.filter(a => {
-          const aDate = new Date(a.createdAt);
-          return aDate >= startOfMonth && aDate <= endOfMonth;
-        });
-
-        bySetor = {} as Record<SectorType, number>;
-        SECTORS_LIST.forEach(s => {
-          bySetor[s] = 0;
-        });
-
-        // Contar TODAS as anomalias do mês
-        monthAnomalies.forEach(a => {
-          const sector = (a.sector || 'Ordenha') as SectorType;
-          
-          // Se o setor é válido, incrementar seu contador
-          if (SECTORS_LIST.includes(sector as any)) {
-            bySetor[sector]++;
-          } else {
-            // Fallback: colocar em "Ordenha"
-            bySetor['Ordenha']++;
-          }
-        });
-
-        // Salvar dados de mês passado para preservar histórico
-        if (isMêsPassado && !closedMonths[monthKey]) {
-          setClosedMonths(prev => ({
-            ...prev,
-            [monthKey]: bySetor
-          }));
-        }
-
-        // Label: jan 26, fev 26, mar 26, etc.
-        const monthNames = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
-        const label = `${monthNames[date.getMonth()]} ${String(date.getFullYear()).slice(-2)}`;
-
-        months.push({
-          month: monthKey,
-          label,
-          bySetor
-        });
-      }
-    }
-
-    return months;
+    return groupAnomaliesByMonth(anomalies, selectedYear);
   };
 
   const monthlyData = getMonthlyData();
@@ -200,46 +103,24 @@ export const AnomalyQuantityScreen: React.FC = () => {
 
   const maxValue = Math.max(...chartData.map(d => d.total), 5) * 1.1;
 
-  // Estatísticas totais do DASHBOARD - USAR DADOS DE JANEIRO APENAS (MESMOS DO GRÁFICO)
-  const janData = monthlyData.find(m => m.month === '2026-01');
-  const stats = janData ? { ...janData.bySetor } : ({} as Record<SectorType, number>);
+  const stats = {} as Record<SectorType, number>;
   
   // Garantir que todos os setores apareçam
   SECTORS_LIST.forEach(s => {
-    if (!(s in stats)) stats[s] = 0;
+    stats[s] = filteredByPeriod.filter(a => a.sector === s).length;
   });
 
-  const totalAnomalies = Object.values(stats).reduce((a, b) => a + b, 0);
+  const totalAnomalies = annualAnomalies.length;
 
   const clearFilters = () => {
     setSelectedSector('all');
-    setMonthsToShow(12);
     setViewMode('chart');
     const now = new Date();
-    setStartDate('2026-01-01');
+    const year = now.getFullYear();
+    setSelectedYear(year);
+    setStartDate(`${year}-01-01`);
     setEndDate(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`);
   };
-
-  if (!accessGranted) {
-    return (
-      <Layout>
-        <Header title="Quantidade de Anomalias" targetRoute="/anomalies" />
-        <div className="flex-1 flex items-center justify-center">
-          <div className="text-center">
-            <Lock size={48} className="mx-auto text-gray-400 mb-4" />
-            <p className="text-gray-600 font-bold">Acessando...</p>
-          </div>
-        </div>
-        {showPinModal && (
-          <PinRequestModal
-            onSuccess={handlePinSuccess}
-            onClose={() => window.history.back()}
-            title="Quantidade de Anomalias"
-          />
-        )}
-      </Layout>
-    );
-  }
 
   return (
     <Layout>
@@ -296,23 +177,25 @@ export const AnomalyQuantityScreen: React.FC = () => {
                 </div>
               </div>
 
-              {/* Períodos a mostrar */}
+              {/* Ano do gráfico anual */}
               <div>
-                <label className="text-xs font-bold text-gray-600 mb-2 block">Períodos</label>
-                <div className="flex gap-2">
-                  {[3, 6, 12].map(n => (
-                    <button
-                      key={n}
-                      onClick={() => setMonthsToShow(n)}
-                      className={`flex-1 p-2 rounded-lg font-bold text-sm transition ${
-                        monthsToShow === n
-                          ? 'bg-blue-600 text-white'
-                          : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                      }`}
-                    >
-                      {n}M
-                    </button>
-                  ))}
+                <label className="text-xs font-bold text-gray-600 mb-2 block">Ano do gráfico</label>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setSelectedYear(y => y - 1)}
+                    className="p-2 rounded-lg bg-gray-100 text-gray-700 border border-gray-200"
+                  >
+                    <ChevronLeft size={18} />
+                  </button>
+                  <div className="flex-1 rounded-lg border border-gray-200 bg-gray-50 p-2 text-center text-lg font-black text-gray-900">
+                    {selectedYear}
+                  </div>
+                  <button
+                    onClick={() => setSelectedYear(y => y + 1)}
+                    className="p-2 rounded-lg bg-gray-100 text-gray-700 border border-gray-200"
+                  >
+                    <ChevronRight size={18} />
+                  </button>
                 </div>
               </div>
 
@@ -365,7 +248,7 @@ export const AnomalyQuantityScreen: React.FC = () => {
               )}
 
               {/* Botão Limpar Filtros */}
-              {selectedSector !== 'all' && (
+              {(selectedSector !== 'all' || selectedYear !== new Date().getFullYear() || viewMode !== 'chart') && (
                 <button
                   onClick={clearFilters}
                   className="w-full px-3 py-2 bg-red-100 text-red-600 font-bold rounded-lg hover:bg-red-200 transition text-sm flex items-center justify-center gap-1 border-t border-gray-200 mt-3 pt-3"
@@ -379,10 +262,9 @@ export const AnomalyQuantityScreen: React.FC = () => {
 
         {/* GRÁFICO */}
         {viewMode === 'chart' && (
-          chartData.some(d => d.total > 0) ? (
-            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4">
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4">
               <h3 className="font-black text-gray-800 uppercase text-sm mb-4">
-                {selectedSector === 'all' ? 'Anomalias por Mês' : `Anomalias - ${selectedSector}`}
+                {selectedSector === 'all' ? `Anomalias por Mês - ${selectedYear}` : `Anomalias - ${selectedSector} - ${selectedYear}`}
               </h3>
               
               <div className="overflow-x-auto pb-4">
@@ -396,7 +278,7 @@ export const AnomalyQuantityScreen: React.FC = () => {
                       return (
                         <div key={i} className="flex flex-col justify-end items-center group relative flex-1 h-full" style={{ minWidth: '55px' }}>
                           <div className="text-[11px] font-black mb-1 h-5 flex items-end" style={{ color: barColor }}>
-                            {data.total > 0 ? data.total : '-'}
+                            {data.total}
                           </div>
 
                           <div 
@@ -418,7 +300,7 @@ export const AnomalyQuantityScreen: React.FC = () => {
                     return (
                       <div key={i} className="flex flex-col justify-end items-center group relative flex-1 h-full" style={{ minWidth: '55px' }}>
                         <div className="text-[11px] font-black mb-1 h-5 flex items-end text-gray-800">
-                          {data.total > 0 ? data.total : '-'}
+                          {data.total}
                         </div>
 
                         <div className="flex flex-col-reverse rounded-t-md overflow-hidden shadow-sm transition-all duration-500 ease-out hover:opacity-80 cursor-pointer relative" style={{ width: '14px', height: `${Math.max(heightPercent, 2)}%` }}>
@@ -455,16 +337,10 @@ export const AnomalyQuantityScreen: React.FC = () => {
               </div>
 
               <div className="mt-4 pt-3 border-t border-gray-200 text-xs text-gray-600">
-                <p>Cada barra representa um mês (1º ao último dia)</p>
+                <p>Cada barra representa um mês de janeiro a dezembro de {selectedYear}</p>
                 {selectedSector !== 'all' && <p>Mostrando apenas: <strong>{selectedSector}</strong></p>}
               </div>
-            </div>
-          ) : (
-            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-8 text-center">
-              <BarChart3 size={32} className="mx-auto text-gray-300 mb-2" />
-              <p className="text-gray-500 font-bold">Sem dados para exibir</p>
-            </div>
-          )
+          </div>
         )}
 
         {/* TABELA */}
@@ -548,7 +424,7 @@ export const AnomalyQuantityScreen: React.FC = () => {
         {/* TOTAL ACUMULADO - LEGENDA CLICÁVEL (SEM BARRA) */}
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4">
           <h3 className="font-black text-gray-800 uppercase text-sm mb-4">
-            Total Acumulado
+            Total Acumulado - {selectedYear}
           </h3>
 
           {/* Legenda - lista formato */}
@@ -566,7 +442,7 @@ export const AnomalyQuantityScreen: React.FC = () => {
             </button>
 
             {SECTORS_LIST.map(sector => {
-              const count = anomalies.filter(a => a.sector === sector).length;
+              const count = annualAnomalies.filter(a => a.sector === sector).length;
               return (
                 <button
                   key={sector}

@@ -1,17 +1,19 @@
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useNavigate, useLocation, useParams } from 'react-router-dom';
 import { Layout } from '../../components/Layout';
 import { Header } from '../../components/Header';
 import { FieldLabel } from '../../components/FieldLabel';
+import { EmployeeConfirmField } from '../../components/EmployeeConfirmField';
 import { MicrophoneButton } from '../../components/MicrophoneButton';
 import { FileText, Save, Clock, Paperclip, CheckCircle, Trash2, Presentation, Lock } from 'lucide-react';
 import { db } from '../../services/db.service';
-import { FarmDoc, MediaItem } from '../../types';
+import { Employee, FarmDoc, MediaItem } from '../../types';
 import { notify } from '../../services/notification.service';
 import { PinRequestModal } from '../../components/PinRequestModal';
 import { authService } from '../../services/auth.service';
 import { mediaService } from '../../services/media.service';
+import { farmContextService } from '../../services/farm-context.service';
 
 export const AddNormSimpleScreen: React.FC = () => {
   const navigate = useNavigate();
@@ -22,9 +24,22 @@ export const AddNormSimpleScreen: React.FC = () => {
   const categoryLabel = state?.label || 'Documento';
 
   const [title, setTitle] = useState('');
+  const [employees, setEmployees] = useState<Employee[]>([]);
+  const [responsible, setResponsible] = useState('');
   const [docFile, setDocFile] = useState<MediaItem | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [showPinModal, setShowPinModal] = useState(false);
+  const selectedEmployee = employees.find(emp => emp.name === responsible);
+
+  useEffect(() => {
+    const load = async () => {
+      const emps = await db.getEmployees();
+      emps.sort((a, b) => a.name.localeCompare(b.name));
+      setEmployees(emps);
+      setResponsible(farmContextService.getEmployeeName() || 'Administrador');
+    };
+    load();
+  }, []);
 
   const appendText = (setter: React.Dispatch<React.SetStateAction<string>>, text: string) => {
     setter(prev => prev ? prev + ' ' + text : text);
@@ -74,7 +89,9 @@ export const AddNormSimpleScreen: React.FC = () => {
             id: crypto.randomUUID(),
             title: title,
             sector: categoryId || 'Geral', // Usamos o ID da categoria como "Setor" para filtrar depois
-            responsible: 'Administrador', // Valor padrão oculto
+            responsible,
+            employee_id: selectedEmployee?.id || farmContextService.getContext()?.employee_id,
+            employee_name: responsible || farmContextService.getContext()?.employee_name,
             updatedAt: timestamp, 
             media: docFile
         };
@@ -99,6 +116,13 @@ export const AddNormSimpleScreen: React.FC = () => {
       </div>
 
       <div className="flex-1 bg-white p-6 space-y-6 overflow-y-auto pb-10">
+        <EmployeeConfirmField
+          label="Responsável"
+          value={responsible}
+          employees={employees}
+          onChange={setResponsible}
+          helpText="Nome que ficará vinculado a este documento."
+        />
         
         <div>
             <FieldLabel label="Nome do Documento / Título" />

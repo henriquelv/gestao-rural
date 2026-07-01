@@ -4,14 +4,16 @@ import { Header } from '../../components/Header';
 import { Improvement, MediaItem } from '../../types';
 import { db } from '../../services/db.service';
 import { localdb } from '../../services/localdb';
-import { Filter, Calendar, LayoutGrid, X, Camera, Video, List as ListIcon, Download, FileText, Presentation, Image as ImageIcon } from 'lucide-react';
+import { Calendar, LayoutGrid, X, Video, Download, FileText, Presentation, Image as ImageIcon, Trash2, User, Search, Paperclip } from 'lucide-react';
 import { SECTORS_LIST, getSectorColors } from '../../constants/sectors';
 import { mediaService } from '../../services/media.service';
 import { useImageZoom } from '../../utils/useImageZoom';
+import { PinRequestModal } from '../../components/PinRequestModal';
+import { notify } from '../../services/notification.service';
+import { EmptyState, FilterOption, FilterSheet, FilterToolbar } from '../../components/UiPrimitives';
 
 export const ListImprovementsScreen: React.FC = () => {
   const [items, setItems] = useState<Improvement[]>([]);
-  const [viewMode, setViewMode] = useState<'list' | 'grid'>('list');
   const [showFilters, setShowFilters] = useState(false);
   const [selectedItem, setSelectedItem] = useState<Improvement | null>(null);
   const [viewingMedia, setViewingMedia] = useState<MediaItem | null>(null);
@@ -20,7 +22,12 @@ export const ListImprovementsScreen: React.FC = () => {
   const [mediaUrls, setMediaUrls] = useState<Record<string, string>>({});
 
   const [filterSectors, setFilterSectors] = useState<string[]>([]);
-  const [filterPeriod, setFilterPeriod] = useState<'all'|'month'>('all');
+  const [filterPeriod, setFilterPeriod] = useState<'all' | 'today' | '7days' | 'month'>('all');
+  const [filterEmployee, setFilterEmployee] = useState('');
+  const [filterMedia, setFilterMedia] = useState<'all' | 'with' | 'without'>('all');
+  const [searchTerm, setSearchTerm] = useState('');
+  const [showPinModal, setShowPinModal] = useState(false);
+  const [pendingAction, setPendingAction] = useState<(() => Promise<void> | void) | null>(null);
 
   // Gestos de zoom
   const viewingZoomGestures = useImageZoom((newZoom) => setViewingZoom(newZoom));
@@ -31,37 +38,37 @@ export const ListImprovementsScreen: React.FC = () => {
     return cached || m.remoteUrl || m.uri || '';
   };
 
-    useEffect(() => { 
-      let mounted = true;
-      const load = async () => { if (!mounted) return; const data = await db.getImprovements(); if (mounted) setItems(data); };
-      load();
-      const unsub = localdb.subscribe('improvements', () => { load(); });
-      return () => { mounted = false; unsub && unsub(); };
-    }, []);
+  useEffect(() => {
+    let mounted = true;
+    const load = async () => { if (!mounted) return; const data = await db.getImprovements(); if (mounted) setItems(data); };
+    load();
+    const unsub = localdb.subscribe('improvements', () => { load(); });
+    return () => { mounted = false; unsub && unsub(); };
+  }, []);
 
   useEffect(() => {
-      let cancelled = false;
-      const loadThumbs = async () => {
-          const entries: Array<[string, string]> = [];
-          for (const it of items) {
-              for (const m of it.media || []) {
-                  if (!m?.id) continue;
-                  if (mediaUrls[m.id]) continue;
-                  const url = await mediaService.loadMediaUrl(m);
-                  if (url) entries.push([m.id, url]);
-              }
-          }
-          if (cancelled) return;
-          if (entries.length > 0) {
-              setMediaUrls(prev => {
-                  const next = { ...prev };
-                  for (const [id, url] of entries) next[id] = url;
-                  return next;
-              });
-          }
-      };
-      if (items.length > 0) loadThumbs();
-      return () => { cancelled = true; };
+    let cancelled = false;
+    const loadThumbs = async () => {
+      const entries: Array<[string, string]> = [];
+      for (const it of items) {
+        for (const m of it.media || []) {
+          if (!m?.id) continue;
+          if (mediaUrls[m.id]) continue;
+          const url = await mediaService.loadMediaUrl(m);
+          if (url) entries.push([m.id, url]);
+        }
+      }
+      if (cancelled) return;
+      if (entries.length > 0) {
+        setMediaUrls(prev => {
+          const next = { ...prev };
+          for (const [id, url] of entries) next[id] = url;
+          return next;
+        });
+      }
+    };
+    if (items.length > 0) loadThumbs();
+    return () => { cancelled = true; };
   }, [items]);
 
   const toggleSectorFilter = (s: string) => {
@@ -69,265 +76,309 @@ export const ListImprovementsScreen: React.FC = () => {
   };
 
   const filteredItems = useMemo(() => {
-    let res = items;
+    let res = [...items];
     if (filterSectors.length > 0) res = res.filter(i => filterSectors.includes(i.sector));
-    if (filterPeriod === 'month') {
-        const month = new Date().toISOString().substring(0, 7);
-        res = res.filter(i => i.createdAt.startsWith(month));
+    if (filterPeriod === 'today') {
+      const today = new Date().toLocaleDateString('pt-BR');
+      res = res.filter(i => new Date(i.createdAt).toLocaleDateString('pt-BR') === today);
+    } else if (filterPeriod === '7days') {
+      const cutoff = new Date();
+      cutoff.setDate(cutoff.getDate() - 7);
+      res = res.filter(i => new Date(i.createdAt) >= cutoff);
+    } else if (filterPeriod === 'month') {
+      const month = new Date().toISOString().substring(0, 7);
+      res = res.filter(i => i.createdAt.startsWith(month));
     }
+    if (filterEmployee) {
+      res = res.filter(i => (i.employee_name || i.employee || '').toLowerCase() === filterEmployee.toLowerCase());
+    }
+    if (filterMedia === 'with') res = res.filter(i => (i.media || []).length > 0);
+    if (filterMedia === 'without') res = res.filter(i => !i.media || i.media.length === 0);
+    if (searchTerm.trim()) {
+      const term = searchTerm.trim().toLowerCase();
+      res = res.filter(i => i.description.toLowerCase().includes(term)
+        || i.sector.toLowerCase().includes(term)
+        || (i.employee || '').toLowerCase().includes(term)
+        || (i.employee_name || '').toLowerCase().includes(term));
+    }
+    res.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
     return res;
-  }, [items, filterSectors, filterPeriod]);
+  }, [items, filterSectors, filterPeriod, filterEmployee, filterMedia, searchTerm]);
 
-  const activeFiltersCount = filterSectors.length + (filterPeriod !== 'all' ? 1 : 0);
+  const employeeOptions = useMemo(() => {
+    const names = items.map(i => i.employee_name || i.employee).filter(Boolean);
+    return Array.from(new Set(names)).sort((a, b) => a.localeCompare(b));
+  }, [items]);
+
+  const activeFiltersCount = filterSectors.length
+    + (filterPeriod !== 'all' ? 1 : 0)
+    + (filterEmployee ? 1 : 0)
+    + (filterMedia !== 'all' ? 1 : 0)
+    + (searchTerm.trim() ? 1 : 0);
+
+  const clearFilters = () => {
+    setFilterSectors([]);
+    setFilterPeriod('all');
+    setFilterEmployee('');
+    setFilterMedia('all');
+    setSearchTerm('');
+  };
 
   const getIcon = (type: string) => {
-      switch(type) {
-          case 'pdf': return <FileText size={20} className="text-red-500" />;
-          case 'doc': return <FileText size={20} className="text-blue-600" />;
-          case 'ppt': return <Presentation size={20} className="text-orange-500" />;
-          case 'video': return <Video size={20} className="text-purple-600" />;
-          case 'photo': return <ImageIcon size={20} className="text-blue-400" />;
-          default: return <FileText size={20} className="text-gray-500" />;
-      }
+    switch (type) {
+      case 'pdf': return <FileText size={20} className="text-red-500" />;
+      case 'doc': return <FileText size={20} className="text-blue-600" />;
+      case 'ppt': return <Presentation size={20} className="text-orange-500" />;
+      case 'video': return <Video size={20} className="text-purple-600" />;
+      case 'photo': return <ImageIcon size={20} className="text-blue-400" />;
+      default: return <FileText size={20} className="text-gray-500" />;
+    }
   };
 
   const openMedia = async (m: MediaItem) => {
-      setViewingMedia(m);
-      const url = await mediaService.loadMediaUrl(m);
-      setViewingUrl(url || m.remoteUrl || m.uri || '');
+    setViewingMedia(m);
+    const url = await mediaService.loadMediaUrl(m);
+    setViewingUrl(url || m.remoteUrl || m.uri || '');
+  };
+
+  const handleDelete = async (improvement: Improvement) => {
+    const action = async () => {
+      try {
+        await db.deleteImprovement(improvement.id);
+        notify('Melhoria excluída!', 'success');
+        // Reload items
+        const data = await db.getImprovements();
+        setItems(data);
+      } catch (e) {
+        notify('Erro ao excluir melhoria.', 'error');
+      }
+    };
+
+    setPendingAction(() => action);
+    setShowPinModal(true);
   };
 
   return (
     <Layout>
       <Header title="Lista de Melhorias" targetRoute="/improvements" />
 
-      {/* TOOLBAR */}
-      <div className="bg-white border-b border-gray-200 p-2 shadow-sm z-10 sticky top-16 flex flex-col gap-2">
-        <div className="flex gap-2">
-            <button onClick={() => setShowFilters(true)} className={`flex-1 flex items-center justify-center px-4 py-3 rounded-lg font-bold border-2 transition-colors ${activeFiltersCount > 0 ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-200'}`}>
-                <Filter size={18} className="mr-2" /> {activeFiltersCount > 0 ? `Filtros (${activeFiltersCount})` : 'Filtrar'}
-            </button>
-        </div>
-        <div className="flex bg-gray-100 p-1 rounded-lg border border-gray-200">
-            <button onClick={() => setViewMode('list')} className={`flex-1 flex items-center justify-center py-2 rounded-md transition-all text-xs font-bold uppercase ${viewMode === 'list' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}><ListIcon size={16} className="mr-1" /> Lista</button>
-            <button onClick={() => setViewMode('grid')} className={`flex-1 flex items-center justify-center py-2 rounded-md transition-all text-xs font-bold uppercase ${viewMode === 'grid' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400'}`}><LayoutGrid size={16} className="mr-1" /> Grade</button>
-        </div>
-      </div>
+      <FilterToolbar
+        activeCount={activeFiltersCount}
+        onOpen={() => setShowFilters(true)}
+        resultCount={filteredItems.length}
+        totalCount={items.length}
+      />
 
       <div className="flex-1 bg-gray-100 p-4 overflow-y-auto">
-          <div className={viewMode === 'list' ? "space-y-3" : "grid grid-cols-2 gap-3"}>
-            {filteredItems.map(i => {
-              const photo = i.media.find(m => m.type === 'photo');
-              const photoUrl = bestMediaUrl(photo);
-              return (
-                <div key={i.id} onClick={() => setSelectedItem(i)} className={`bg-white rounded-xl shadow-sm border border-gray-200 cursor-pointer overflow-hidden ${viewMode === 'list' ? 'p-4' : 'flex flex-col'}`}>
-                    {viewMode === 'grid' && (
-                        <div className="h-24 bg-green-50 flex items-center justify-center border-b border-gray-100 relative">
-                            {photo && photoUrl ? (
-                              <img
-                                src={photoUrl}
-                                className="w-full h-full object-cover"
-                                onError={(e) => {
-                                  const next = photo?.remoteUrl || photo?.uri || '';
-                                  if (next && (e.currentTarget as HTMLImageElement).src !== next) {
-                                    (e.currentTarget as HTMLImageElement).src = next;
-                                  }
-                                }}
-                              />
-                            ) : <Camera className="text-green-200"/>}
-                        </div>
-                    )}
-                    <div className={viewMode === 'grid' ? 'p-3 flex-1' : ''}>
-                        <div className="flex justify-between items-start mb-2">
-                            <span
-                              className="text-[10px] font-bold px-2 py-0.5 rounded truncate max-w-[70%]"
-                              style={{ backgroundColor: getSectorColors(i.sector).bg, color: getSectorColors(i.sector).fg }}
-                            >
-                              {i.sector}
-                            </span>
-                            <span className="text-[10px] text-gray-500 font-bold">{new Date(i.createdAt).toLocaleDateString('pt-BR')}</span>
-                        </div>
-                        <h3 className={`font-bold text-gray-800 leading-tight mb-2 ${viewMode === 'grid' ? 'text-xs line-clamp-2' : 'line-clamp-2'}`}>{i.description}</h3>
-                        <p className="text-[10px] text-gray-500 mb-2">Feito por: {i.employee}</p>
-                        
-                        {viewMode === 'list' && i.media.length > 0 && (
-                            <div className="mt-2 flex gap-2 overflow-x-auto pb-1" onClick={(e) => e.stopPropagation()}>
-                                {i.media.map((m, idx) => (
-                                    <div 
-                                        key={idx} 
-                                        className="h-14 w-14 rounded-lg bg-gray-100 flex items-center justify-center border border-gray-200 overflow-hidden relative cursor-pointer"
-                                        onClick={() => openMedia(m)}
-                                    >
-                                        {m.type === 'photo' ? (
-                                            bestMediaUrl(m) ? (
-                                              <img
-                                                src={bestMediaUrl(m)}
-                                                className="w-full h-full object-cover"
-                                                onError={(e) => {
-                                                  const next = m.remoteUrl || m.uri || '';
-                                                  if (next && (e.currentTarget as HTMLImageElement).src !== next) {
-                                                    (e.currentTarget as HTMLImageElement).src = next;
-                                                  }
-                                                }}
-                                              />
-                                            ) : getIcon(m.type)
-                                        ) : getIcon(m.type)}
-                                    </div>
-                                ))}
-                            </div>
-                        )}
+        <div className="space-y-3">
+          {filteredItems.map(i => {
+            const photo = i.media?.find(m => m.type === 'photo');
+            const hasVideo = i.media?.some(m => m.type === 'video');
+            const hasDocs = i.media?.some(m => ['pdf', 'doc', 'ppt'].includes(m.type));
+            const employeeName = i.employee_name || i.employee;
+            
+            return (
+              <div
+                key={i.id}
+                onClick={() => setSelectedItem(i)}
+                className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden mb-4 cursor-pointer hover:shadow-md active:opacity-90 transition-all"
+              >
+                <div className="p-4">
+                  <div className="flex items-start gap-4">
+                    {/* Ícone Quadrado */}
+                    <div className="w-14 h-14 rounded-xl flex items-center justify-center shrink-0 border border-gray-100" style={{ backgroundColor: getSectorColors(i.sector).bg, color: getSectorColors(i.sector).fg }}>
+                      {photo ? <ImageIcon size={24} /> : hasVideo ? <Video size={24} /> : <Presentation size={24} />}
                     </div>
+                    
+                    {/* Textos */}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex justify-between items-start mb-1">
+                        <h3 className="font-black text-gray-800 text-base leading-tight truncate">
+                          Melhoria - {i.sector}
+                        </h3>
+                        <button onClick={(e) => { e.stopPropagation(); handleDelete(i); }} className="p-1 -mr-1 -mt-1 text-gray-300 hover:text-red-500 active:text-red-600 transition-colors">
+                          <Trash2 size={18} />
+                        </button>
+                      </div>
+                      <p className="text-gray-600 text-sm mb-2 line-clamp-2">
+                        {i.description}
+                      </p>
+                      <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500">
+                        <span className="inline-flex items-center gap-1"><Calendar size={13} />{new Date(i.createdAt).toLocaleDateString('pt-BR')}</span>
+                        <span className="inline-flex items-center gap-1 min-w-0"><User size={13} /><span className="truncate max-w-[120px]">{employeeName}</span></span>
+                        {(photo || hasVideo || hasDocs) && (
+                          <span className="inline-flex items-center gap-1 text-blue-600 font-bold"><Paperclip size={13} />{i.media.length}</span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
                 </div>
-              );
-            })}
-            {filteredItems.length === 0 && <p className="col-span-2 text-center text-gray-400 mt-10">Nenhuma melhoria encontrada.</p>}
-          </div>
+              </div>
+            );
+          })}
+          {filteredItems.length === 0 && <EmptyState title="Nenhuma melhoria encontrada" description="Ajuste os filtros ou registre uma nova melhoria." />}
+        </div>
       </div>
 
-      {/* FILTER MODAL */}
       {showFilters && (
-        <div className="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center animate-in fade-in">
-          <div className="bg-white w-full max-w-md p-6 rounded-t-2xl sm:rounded-xl shadow-2xl">
-            <div className="flex justify-between items-center mb-6">
-              <h2 className="text-2xl font-black text-gray-800">Filtrar</h2>
-              <button onClick={() => setShowFilters(false)} className="p-2 bg-gray-100 rounded-full"><X size={24} /></button>
+        <FilterSheet title="Filtrar melhorias" onClose={() => setShowFilters(false)} onClear={clearFilters}>
+          <div>
+            <label className="block text-sm font-black text-gray-500 mb-2 uppercase flex items-center"><Search size={16} className="mr-1" /> Busca</label>
+            <input
+              value={searchTerm}
+              onChange={e => setSearchTerm(e.target.value)}
+              className="w-full p-3 border-2 border-gray-200 rounded-lg outline-none focus:border-blue-500 font-bold text-gray-700"
+              placeholder="Descrição, setor ou funcionário"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-black text-gray-500 mb-2 uppercase flex items-center"><Calendar size={16} className="mr-1" /> Período</label>
+            <div className="grid grid-cols-2 gap-2">
+              <FilterOption active={filterPeriod === 'today'} onClick={() => setFilterPeriod('today')}>Hoje</FilterOption>
+              <FilterOption active={filterPeriod === '7days'} onClick={() => setFilterPeriod('7days')}>7 Dias</FilterOption>
+              <FilterOption active={filterPeriod === 'month'} onClick={() => setFilterPeriod('month')}>Este Mês</FilterOption>
+              <FilterOption active={filterPeriod === 'all'} onClick={() => setFilterPeriod('all')}>Todos</FilterOption>
             </div>
-            <div className="space-y-6 pb-6">
-                <div>
-                    <label className="block text-sm font-bold text-gray-500 mb-2 uppercase flex items-center"><Calendar size={16} className="mr-1"/> Período</label>
-                    <div className="grid grid-cols-2 gap-2">
-                        <button onClick={() => setFilterPeriod('month')} className={`p-3 rounded-lg font-bold border-2 ${filterPeriod === 'month' ? 'bg-blue-600 text-white' : 'bg-white text-gray-600'}`}>Este Mês</button>
-                        <button onClick={() => setFilterPeriod('all')} className={`p-3 rounded-lg font-bold border-2 ${filterPeriod === 'all' ? 'bg-blue-600 text-white' : 'bg-white text-gray-600'}`}>Todos</button>
-                    </div>
+          </div>
+          <div>
+            <label className="block text-sm font-black text-gray-500 mb-2 uppercase flex items-center"><User size={16} className="mr-1" /> Funcionário</label>
+            <select
+              value={filterEmployee}
+              onChange={(e) => setFilterEmployee(e.target.value)}
+              className="w-full p-3 border-2 border-gray-200 rounded-lg bg-white font-bold text-gray-700 outline-none focus:border-blue-500"
+            >
+              <option value="">Todos</option>
+              {employeeOptions.map(name => <option key={name} value={name}>{name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm font-black text-gray-500 mb-2 uppercase flex items-center"><LayoutGrid size={16} className="mr-1" /> Setores</label>
+            <div className="grid grid-cols-2 gap-2">
+              {SECTORS_LIST.map(s => (
+                <FilterOption
+                  key={s}
+                  active={filterSectors.includes(s)}
+                  onClick={() => toggleSectorFilter(s)}
+                  style={{ backgroundColor: getSectorColors(s).bg, color: getSectorColors(s).fg, borderColor: getSectorColors(s).border }}
+                >
+                  {s}
+                </FilterOption>
+              ))}
+            </div>
+          </div>
+          <div>
+            <label className="block text-sm font-black text-gray-500 mb-2 uppercase flex items-center"><Paperclip size={16} className="mr-1" /> Anexos</label>
+            <div className="grid grid-cols-3 gap-2">
+              <FilterOption active={filterMedia === 'all'} onClick={() => setFilterMedia('all')}>Todos</FilterOption>
+              <FilterOption active={filterMedia === 'with'} onClick={() => setFilterMedia('with')}>Com</FilterOption>
+              <FilterOption active={filterMedia === 'without'} onClick={() => setFilterMedia('without')}>Sem</FilterOption>
+            </div>
+          </div>
+        </FilterSheet>
+      )}
+
+      {selectedItem && (
+        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4 animate-in fade-in">
+          <div className="bg-white w-full max-w-lg rounded-2xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col">
+            <div className="bg-green-600 p-4 flex justify-between items-center text-white"><h3 className="font-bold text-lg">Detalhe</h3><button onClick={() => setSelectedItem(null)}><X /></button></div>
+            <div className="p-6 overflow-y-auto">
+              <p className="font-bold mb-2 inline-flex px-2 py-1 rounded" style={{ backgroundColor: getSectorColors(selectedItem.sector).bg, color: getSectorColors(selectedItem.sector).fg }}>{selectedItem.sector}</p>
+              <div className="bg-gray-50 p-4 rounded-xl border border-gray-100 mb-4"><p className="text-gray-800 text-lg">{selectedItem.description}</p></div>
+              {selectedItem.media.length > 0 && <div className="grid grid-cols-2 gap-2">{selectedItem.media.map(m => (
+                <div key={m.id} className="h-40 bg-gray-100 rounded-lg overflow-hidden relative flex items-center justify-center cursor-pointer" onClick={() => openMedia(m)}>
+                  {m.type === 'photo' ? (
+                    bestMediaUrl(m) ? (
+                      <img
+                        src={bestMediaUrl(m)}
+                        className="w-full h-full object-cover"
+                        onError={(e) => {
+                          const next = m.remoteUrl || m.uri || '';
+                          if (next && (e.currentTarget as HTMLImageElement).src !== next) {
+                            (e.currentTarget as HTMLImageElement).src = next;
+                          }
+                        }}
+                      />
+                    ) : getIcon(m.type)
+                  ) : getIcon(m.type)}
                 </div>
-                <div>
-                    <label className="block text-sm font-bold text-gray-500 mb-2 uppercase flex items-center"><LayoutGrid size={16} className="mr-1"/> Setores</label>
-                    <div className="grid grid-cols-2 gap-2">
-                        {SECTORS_LIST.map(s => (
-                            <button
-                              key={s}
-                              onClick={() => toggleSectorFilter(s)}
-                              className="p-2 rounded-lg text-sm font-bold border-2"
-                              style={filterSectors.includes(s)
-                                ? { backgroundColor: getSectorColors(s).bg, color: getSectorColors(s).fg, borderColor: getSectorColors(s).border }
-                                : { backgroundColor: '#FFFFFF', color: '#374151', borderColor: '#E5E7EB' }
-                              }
-                            >
-                              {s}
-                            </button>
-                        ))}
-                    </div>
-                </div>
+              ))}</div>}
             </div>
-            <div className="flex gap-3 pt-4 border-t border-gray-100">
-              <button onClick={() => { setFilterSectors([]); setFilterPeriod('all'); setShowFilters(false); }} className="flex-1 py-4 text-gray-600 font-bold text-lg bg-gray-100 rounded-xl">Limpar</button>
-              <button onClick={() => setShowFilters(false)} className="flex-2 w-2/3 py-4 text-white font-bold text-lg bg-blue-600 rounded-xl shadow-lg">Aplicar</button>
-            </div>
+            <div className="p-4 bg-gray-50 border-t border-gray-200"><button onClick={() => setSelectedItem(null)} className="w-full py-3 bg-gray-200 text-gray-700 font-bold rounded-xl">FECHAR</button></div>
           </div>
         </div>
       )}
 
-      {selectedItem && (
-           <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4 animate-in fade-in">
-               <div className="bg-white w-full max-w-lg rounded-2xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col">
-                   <div className="bg-green-600 p-4 flex justify-between items-center text-white"><h3 className="font-bold text-lg">Detalhe</h3><button onClick={() => setSelectedItem(null)}><X /></button></div>
-                   <div className="p-6 overflow-y-auto">
-                       <p className="font-bold mb-2 inline-flex px-2 py-1 rounded" style={{ backgroundColor: getSectorColors(selectedItem.sector).bg, color: getSectorColors(selectedItem.sector).fg }}>{selectedItem.sector}</p>
-                       <div className="bg-gray-50 p-4 rounded-xl border border-gray-100 mb-4"><p className="text-gray-800 text-lg">{selectedItem.description}</p></div>
-                       {selectedItem.media.length > 0 && <div className="grid grid-cols-2 gap-2">{selectedItem.media.map(m => (
-                           <div key={m.id} className="h-40 bg-gray-100 rounded-lg overflow-hidden relative flex items-center justify-center cursor-pointer" onClick={() => openMedia(m)}>
-                               {m.type === 'photo' ? (
-                                   bestMediaUrl(m) ? (
-                                     <img
-                                       src={bestMediaUrl(m)}
-                                       className="w-full h-full object-cover"
-                                       onError={(e) => {
-                                         const next = m.remoteUrl || m.uri || '';
-                                         if (next && (e.currentTarget as HTMLImageElement).src !== next) {
-                                           (e.currentTarget as HTMLImageElement).src = next;
-                                         }
-                                       }}
-                                     />
-                                   ) : getIcon(m.type)
-                               ) : getIcon(m.type)}
-                           </div>
-                       ))}</div>}
-                   </div>
-                   <div className="p-4 bg-gray-50 border-t border-gray-200"><button onClick={() => setSelectedItem(null)} className="w-full py-3 bg-gray-200 text-gray-700 font-bold rounded-xl">FECHAR</button></div>
-               </div>
-           </div>
-       )}
-
-       {/* MEDIA VIEWER */}
-       {viewingMedia && (
+      {/* MEDIA VIEWER */}
+      {viewingMedia && (
         <div className="fixed inset-0 z-[100] bg-black/90 flex flex-col animate-in fade-in duration-200">
-            <div className="h-16 bg-black flex items-center justify-between px-4 shrink-0">
-                <span className="text-white font-bold truncate pr-4 text-sm">{viewingMedia.name || viewingMedia.type}</span>
-                <div className="flex items-center gap-2">
-                  {viewingMedia.type === 'photo' && (
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => setViewingZoom(Math.max(1, viewingZoom - 0.25))}
-                        className="text-white p-2 bg-white/10 rounded-full hover:bg-white/20"
-                      >
-                        −
-                      </button>
-                      <span className="text-white text-sm font-bold w-12 text-center">{Math.round(viewingZoom * 100)}%</span>
-                      <button
-                        onClick={() => setViewingZoom(Math.min(3, viewingZoom + 0.25))}
-                        className="text-white p-2 bg-white/10 rounded-full hover:bg-white/20"
-                      >
-                        +
-                      </button>
-                    </div>
-                  )}
-                  <button onClick={() => { setViewingMedia(null); setViewingUrl(''); setViewingZoom(1); }} className="bg-white/20 p-2 rounded-full text-white hover:bg-white/30"><X size={20} /></button>
-                </div>
+          <div className="h-16 bg-black flex items-center justify-between px-4 shrink-0">
+            <span className="text-white font-bold truncate pr-4 text-sm">{viewingMedia.name || viewingMedia.type}</span>
+            <div className="flex items-center gap-2">
+              <button onClick={() => { setViewingMedia(null); setViewingUrl(''); }} className="bg-white/20 p-2 rounded-full text-white hover:bg-white/30"><X size={20} /></button>
             </div>
-            <div className="flex-1 flex items-center justify-center p-2 relative bg-gray-900 overflow-auto">
-                {viewingMedia.type === 'photo' ? (
-                    <img
-                      src={viewingUrl || viewingMedia.remoteUrl || viewingMedia.uri}
-                      className="object-contain select-none touch-none"
-                      style={{ transform: `scale(${viewingZoom})`, maxWidth: '100%', maxHeight: '90vh' }}
-                      onTouchStart={viewingZoomGestures.handleTouchStart}
-                      onTouchMove={viewingZoomGestures.handleTouchMove}
-                      onTouchEnd={viewingZoomGestures.handleTouchEnd}
-                      onError={(e) => {
-                        const next = viewingMedia.remoteUrl || viewingMedia.uri || '';
-                        if (next && (e.currentTarget as HTMLImageElement).src !== next) {
-                          (e.currentTarget as HTMLImageElement).src = next;
-                        }
-                      }}
-                    />
-                ) : viewingMedia.type === 'video' ? (
-                    <video
-                      src={viewingUrl || viewingMedia.remoteUrl || viewingMedia.uri}
-                      controls
-                      autoPlay
-                      playsInline
-                      className="max-w-full max-h-full"
-                      onError={(e) => {
-                        const next = viewingMedia.remoteUrl || viewingMedia.uri || '';
-                        const el = e.currentTarget as HTMLVideoElement;
-                        if (next && el.src !== next) {
-                          el.src = next;
-                          void el.play().catch(() => {});
-                        }
-                      }}
-                    />
-                ) : viewingMedia.type === 'pdf' ? (
-                    <iframe src={viewingUrl || viewingMedia.uri} className="w-full h-full bg-white rounded-lg shadow-lg" title="PDF Viewer" />
-                ) : (
-                    <div className="bg-white p-6 rounded-xl text-center">
-                        <div className="mb-4 flex justify-center">{getIcon(viewingMedia.type)}</div>
-                        <h3 className="font-bold text-gray-800 mb-2">Baixar Arquivo</h3>
-                        <p className="text-sm text-gray-500 mb-4 uppercase">{viewingMedia.type}</p>
-                        <a href={viewingUrl || viewingMedia.uri} download={viewingMedia.name || 'arquivo'} className="bg-blue-600 text-white px-6 py-3 rounded-lg font-bold flex items-center gap-2"><Download size={20} /> BAIXAR</a>
-                    </div>
-                )}
-            </div>
+          </div>
+          <div className="flex-1 flex items-center justify-center p-2 relative bg-gray-900 overflow-auto">
+            {viewingMedia.type === 'photo' ? (
+              <img
+                src={viewingUrl || viewingMedia.remoteUrl || viewingMedia.uri}
+                className="object-contain"
+                style={viewingZoomGestures.imageStyle}
+                onTouchStart={viewingZoomGestures.handleTouchStart}
+                onTouchMove={viewingZoomGestures.handleTouchMove}
+                onTouchEnd={viewingZoomGestures.handleTouchEnd}
+                onError={(e) => {
+                  const next = viewingMedia.remoteUrl || viewingMedia.uri || '';
+                  if (next && (e.currentTarget as HTMLImageElement).src !== next) {
+                    (e.currentTarget as HTMLImageElement).src = next;
+                  }
+                }}
+              />
+            ) : viewingMedia.type === 'video' ? (
+              <video
+                src={viewingUrl || viewingMedia.remoteUrl || viewingMedia.uri}
+                controls
+                autoPlay
+                playsInline
+                className="max-w-full max-h-full"
+                onError={(e) => {
+                  const next = viewingMedia.remoteUrl || viewingMedia.uri || '';
+                  const el = e.currentTarget as HTMLVideoElement;
+                  if (next && el.src !== next) {
+                    el.src = next;
+                    void el.play().catch(() => { });
+                  }
+                }}
+              />
+            ) : viewingMedia.type === 'pdf' ? (
+              <iframe src={viewingUrl || viewingMedia.uri} className="w-full h-full bg-white rounded-lg shadow-lg" title="PDF Viewer" />
+            ) : (
+              <div className="bg-white p-6 rounded-xl text-center">
+                <div className="mb-4 flex justify-center">{getIcon(viewingMedia.type)}</div>
+                <h3 className="font-bold text-gray-800 mb-2">Baixar Arquivo</h3>
+                <p className="text-sm text-gray-500 mb-4 uppercase">{viewingMedia.type}</p>
+                <a href={viewingUrl || viewingMedia.uri} download={viewingMedia.name || 'arquivo'} className="bg-blue-600 text-white px-6 py-3 rounded-lg font-bold flex items-center gap-2"><Download size={20} /> BAIXAR</a>
+              </div>
+            )}
+          </div>
         </div>
+      )}
+
+      {showPinModal && (
+        <PinRequestModal
+          title="Excluir Melhoria?"
+          description="Tem certeza que deseja excluir esta melhoria? Ela não poderá ser recuperada. Digite o PIN."
+          onSuccess={() => {
+            setShowPinModal(false);
+            if (pendingAction) {
+              void pendingAction();
+              setPendingAction(null);
+            }
+          }}
+          onClose={() => {
+            setShowPinModal(false);
+            setPendingAction(null);
+          }}
+        />
       )}
     </Layout>
   );

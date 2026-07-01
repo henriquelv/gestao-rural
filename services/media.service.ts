@@ -27,11 +27,33 @@ const _guessExtFromMime = (mime: string): string => {
   return 'bin';
 };
 
+const isRemoteHttpUrl = (value?: string): boolean => {
+  const v = value || '';
+  return v.startsWith('http://') || v.startsWith('https://');
+};
+
+const getOfflineCacheKey = (item: MediaItem): string => {
+  return item.remotePath || item.remoteUrl || (isRemoteHttpUrl(item.uri) ? item.uri || '' : '');
+};
+
+const OFFLINE_PLACEHOLDER =
+  'data:image/svg+xml;charset=utf-8,' +
+  encodeURIComponent(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="640" height="420" viewBox="0 0 640 420">
+      <rect width="640" height="420" fill="#F3F4F6"/>
+      <rect x="28" y="28" width="584" height="364" rx="18" fill="#FFFFFF" stroke="#D1D5DB" stroke-width="4"/>
+      <circle cx="320" cy="168" r="46" fill="#D1D5DB"/>
+      <path d="M188 310l86-92 62 62 40-42 78 72H188z" fill="#9CA3AF"/>
+      <text x="320" y="360" text-anchor="middle" font-family="Arial, sans-serif" font-size="22" font-weight="700" fill="#6B7280">Midia indisponivel offline</text>
+    </svg>`
+  );
+
 const resolveDataPath = (rawPath: string): { path: string; directory?: Directory } => {
   let p = rawPath || '';
   try {
     p = decodeURIComponent(p);
   } catch {
+    // Keep original path when decodeURIComponent receives a non-encoded URI.
   }
 
   if (p.startsWith('file://')) {
@@ -80,13 +102,6 @@ export const mediaService = {
 
   // Helper para obter URL remota (calcula de remotePath se remoteUrl não existe)
   getRemoteUrl(item: MediaItem): string {
-    if (item.remoteUrl) {
-      // Salvar URL remota em cache persistente
-      const cache = this._getRemoteUrlCache();
-      cache[item.remoteUrl] = { url: item.remoteUrl, timestamp: Date.now() };
-      this._saveRemoteUrlCache(cache);
-      return item.remoteUrl;
-    }
     if (item.remotePath) {
       try {
         const { data } = supabase.storage.from('media').getPublicUrl(item.remotePath);
@@ -101,6 +116,13 @@ export const mediaService = {
       } catch {
         return '';
       }
+    }
+    if (item.remoteUrl) {
+      // Salvar URL remota em cache persistente
+      const cache = this._getRemoteUrlCache();
+      cache[item.remoteUrl] = { url: item.remoteUrl, timestamp: Date.now() };
+      this._saveRemoteUrlCache(cache);
+      return item.remoteUrl;
     }
     // Para URIs de assets locais do app (ex: /images/instructions/...), 
     // precisamos resolver o path corretamente
@@ -181,7 +203,8 @@ export const mediaService = {
         localPath: saved.uri,
         mimeType: inputFile.type || this.fallbackMimeType(inputFile.name),
         name: inputFile.name,
-        size: inputFile.size
+        size: inputFile.size,
+        pendingUpload: true
       };
     }
 
@@ -198,17 +221,26 @@ export const mediaService = {
       localPath: id,
       mimeType: inputFile.type || this.fallbackMimeType(inputFile.name),
       name: inputFile.name,
-      size: inputFile.size
+      size: inputFile.size,
+      pendingUpload: true
     };
+  },
+
+  getUnavailablePlaceholder(): string {
+    return OFFLINE_PLACEHOLDER;
+  },
+
+  async resolveMediaSource(item: MediaItem): Promise<string> {
+    return this.loadMediaUrl(item);
   },
 
   async loadMediaUrl(item: MediaItem): Promise<string> {
     if (!item) return '';
 
-    // ── Tentar cache offline antes de qualquer requisição remota ──
-    // Se o item tem remotePath/remoteUrl e está cacheado, servir direto do cache.
-    // Isso garante que imagens de outros dispositivos funcionem sem internet.
-    if ((item.remotePath || item.remoteUrl) && !item.localPath) {
+    // ── SEMPRE tentar cache offline primeiro se o item tem remotePath/remoteUrl ──
+    // Isso garante que imagens de outros dispositivos funcionem sem internet,
+    // mesmo quando o item tem localPath de outro dispositivo.
+    if (getOfflineCacheKey(item)) {
       const offlineUrl = await this.loadFromOfflineCache(item);
       if (offlineUrl) return offlineUrl;
     }
@@ -216,17 +248,11 @@ export const mediaService = {
     // Se não tem localPath, tenta remoteUrl ou uri
     if (!item.localPath) {
       const remoteUrl = this.getRemoteUrl(item);
-      // Para URLs remotas, verificar cache persistente
-      if (remoteUrl && (remoteUrl.startsWith('http://') || remoteUrl.startsWith('https://'))) {
-        // Cache on view: quando carrega do remoto, salvar offline para próxima vez
+      if (remoteUrl && isRemoteHttpUrl(remoteUrl)) {
         if (navigator.onLine) {
-          this.cacheRemoteItem(item).catch(() => {}); // fire and forget
+          this.cacheRemoteItem(item).catch(() => {}); // cache on view
         }
-        const cache = this._getRemoteUrlCache();
-        const cacheKey = remoteUrl;
-        if (cache[cacheKey]) {
-          return cache[cacheKey].url;
-        }
+        if (!navigator.onLine) return item.type === 'photo' ? OFFLINE_PLACEHOLDER : '';
       }
       return remoteUrl;
     }
@@ -237,26 +263,28 @@ export const mediaService = {
 
         // Já é uma URL pronta (http/https/capacitor)
         if (lp.startsWith('http://') || lp.startsWith('https://') || lp.startsWith('capacitor://')) {
+          // Se offline e é URL remota, não vai funcionar — retorna vazio
+          if (!navigator.onLine && (lp.startsWith('http://') || lp.startsWith('https://'))) {
+            return item.type === 'photo' ? OFFLINE_PLACEHOLDER : '';
+          }
           return lp;
         }
 
         // Para file:// ou content://, primeiro verificar se o arquivo existe
         if (lp.startsWith('file:') || lp.startsWith('content:')) {
-          // Tentar ler o arquivo para verificar se existe
           try {
             if (lp.startsWith('content:')) return lp;
             const resolved = resolveDataPath(lp);
             await Filesystem.stat({ path: resolved.path, directory: resolved.directory });
-            // Arquivo existe, retornar URL convertida
             return Capacitor.convertFileSrc(lp);
           } catch {
-            // Arquivo NÃO existe - tentar cache offline
-            const offlineUrl = await this.loadFromOfflineCache(item);
-            if (offlineUrl) return offlineUrl;
-            // Fallback: URL remota + cachear para próxima vez
+            // Arquivo NÃO existe — fallback remoto + cachear
             const remoteUrl = this.getRemoteUrl(item);
-            if (navigator.onLine) this.cacheRemoteItem(item).catch(() => {});
-            return remoteUrl;
+            if (navigator.onLine) {
+              this.cacheRemoteItem(item).catch(() => {});
+              return remoteUrl;
+            }
+            return '';
           }
         }
 
@@ -276,31 +304,26 @@ export const mediaService = {
             if (r?.uri) return Capacitor.convertFileSrc(r.uri);
           }
         } catch {
-          // Arquivo NÃO existe - tentar cache offline
-          const offlineUrl = await this.loadFromOfflineCache(item);
-          if (offlineUrl) return offlineUrl;
-          // Fallback: URL remota + cachear para próxima vez
+          // Arquivo NÃO existe — fallback remoto + cachear
           const remoteUrl = this.getRemoteUrl(item);
-          if (navigator.onLine) this.cacheRemoteItem(item).catch(() => {});
-          return remoteUrl;
+          if (navigator.onLine) {
+            this.cacheRemoteItem(item).catch(() => {});
+            return remoteUrl;
+          }
+          return item.type === 'photo' ? OFFLINE_PLACEHOLDER : '';
         }
 
         return Capacitor.convertFileSrc(lp);
       } catch {
-        const offlineUrl = await this.loadFromOfflineCache(item);
-        if (offlineUrl) return offlineUrl;
         const remoteUrl = this.getRemoteUrl(item);
         if (navigator.onLine) this.cacheRemoteItem(item).catch(() => {});
-        return remoteUrl;
+        return navigator.onLine ? remoteUrl : (item.type === 'photo' ? OFFLINE_PLACEHOLDER : '');
       }
     }
 
     // Web: buscar blob no IndexedDB
     const record = await webDB.media_blobs.get(item.localPath);
     if (record?.blob) {
-      // Cache object URLs to avoid creating new blobs every render and
-      // to allow reuse across components. Also track createdAt to
-      // invalidate when underlying blob changes.
       try {
         if (!(mediaService as any)._webUrlCache) (mediaService as any)._webUrlCache = {} as Record<string, { url: string; createdAt?: string }>;
         const cache = (mediaService as any)._webUrlCache as Record<string, { url: string; createdAt?: string }>;
@@ -308,9 +331,10 @@ export const mediaService = {
         if (cache[key] && cache[key].createdAt === record.createdAt) {
           return cache[key].url;
         }
-        // If there is an old URL, revoke it
         if (cache[key] && cache[key].url) {
-          try { URL.revokeObjectURL(cache[key].url); } catch { }
+          try { URL.revokeObjectURL(cache[key].url); } catch {
+            // Best-effort cleanup only.
+          }
         }
         const url = URL.createObjectURL(record.blob);
         cache[key] = { url, createdAt: record.createdAt };
@@ -320,12 +344,10 @@ export const mediaService = {
       }
     }
 
-    // Fallback: tentar cache offline, senão URL remota + cachear
-    const offlineUrl = await this.loadFromOfflineCache(item);
-    if (offlineUrl) return offlineUrl;
+    // Fallback: URL remota + cachear
     const remoteUrl = this.getRemoteUrl(item);
     if (navigator.onLine) this.cacheRemoteItem(item).catch(() => {});
-    return remoteUrl;
+    return navigator.onLine ? remoteUrl : (item.type === 'photo' ? OFFLINE_PLACEHOLDER : '');
   },
 
   async readMediaData(item: MediaItem): Promise<Blob | null> {
@@ -393,10 +415,14 @@ export const mediaService = {
           const cache = (mediaService as any)._webUrlCache as Record<string, { url: string; createdAt?: string }> | undefined;
           const key = String(item.localPath);
           if (cache && cache[key] && cache[key].url) {
-            try { URL.revokeObjectURL(cache[key].url); } catch { }
+            try { URL.revokeObjectURL(cache[key].url); } catch {
+              // Best-effort cleanup only.
+            }
             delete cache[key];
           }
-        } catch { }
+        } catch {
+          // Cache cleanup should not block deleting the stored blob.
+        }
         await webDB.media_blobs.delete(item.localPath);
       }
     } catch {
@@ -408,7 +434,7 @@ export const mediaService = {
 
   /** Verifica se um item de mídia remoto já está cacheado localmente */
   isOfflineCached(item: MediaItem): boolean {
-    const key = item.remotePath || item.remoteUrl || '';
+    const key = getOfflineCacheKey(item);
     if (!key) return false;
     return !!_getOfflineCacheIndex()[key];
   },
@@ -418,14 +444,14 @@ export const mediaService = {
     const remoteUrl = this.getRemoteUrl(item);
     if (!remoteUrl || !navigator.onLine) return false;
 
-    const cacheKey = item.remotePath || remoteUrl;
+    const cacheKey = getOfflineCacheKey(item) || remoteUrl;
     const index = _getOfflineCacheIndex();
     if (index[cacheKey]) return true; // já cacheado
 
     try {
-      // Timeout de 30s para não travar se a conexão cair no meio
+      // Timeout curto para não travar abertura/sync quando uma mídia remota demora.
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 30000);
+      const timeout = setTimeout(() => controller.abort(), 10000);
       const resp = await fetch(remoteUrl, { signal: controller.signal });
       clearTimeout(timeout);
       if (!resp.ok) return false;
@@ -463,7 +489,7 @@ export const mediaService = {
 
   /** Carrega mídia do cache offline — retorna URL local ou '' se não cacheado */
   async loadFromOfflineCache(item: MediaItem): Promise<string> {
-    const cacheKey = item.remotePath || item.remoteUrl || '';
+    const cacheKey = getOfflineCacheKey(item);
     if (!cacheKey) return '';
 
     const index = _getOfflineCacheIndex();

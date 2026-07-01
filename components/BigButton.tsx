@@ -1,17 +1,17 @@
 
 import React from 'react';
-import { 
-  AlertTriangle, FileText, Megaphone, Settings, Book, BarChart3, TrendingUp, 
+import {
+  AlertTriangle, FileText, Megaphone, Settings, Book, BarChart3, TrendingUp,
   Plus, List, Droplets, Activity, Ban, Baby, Tractor, Users, ClipboardList,
   Wrench, Truck, Box, Calendar, CheckCircle, Presentation,
-  Sun, Moon, Cloud, Thermometer, Wind, MapPin, Phone, Mail, Search, Trash, Edit, Save, 
-  Camera, Video, Mic, Play, Pause, Square, Volume2, Wifi, Battery, Bluetooth, Cpu, Database, 
-  HardDrive, Server, Smartphone, Monitor, Printer, Speaker, Headphones, Watch, Scissors, Key, 
-  Lock, Unlock, Shield, Star, Heart, ThumbsUp, ThumbsDown, Smile, Frown, Meh, HelpCircle, 
-  Info, AlertCircle, XCircle, ArrowRight, ArrowLeft, ArrowUp, ArrowDown, ChevronRight, 
-  ChevronLeft, ChevronUp, ChevronDown, Menu, MoreHorizontal, MoreVertical, Loader, RefreshCw, 
-  Upload, Download, Share, ExternalLink, Link, Paperclip, Map, Navigation, Compass, Anchor, 
-  Flag, Bookmark, Tag, Hash, Percent, DollarSign, CreditCard, ShoppingCart, Gift, Package, 
+  Sun, Moon, Cloud, Thermometer, Wind, MapPin, Phone, Mail, Search, Trash, Edit, Save,
+  Camera, Video, Mic, Play, Pause, Square, Volume2, Wifi, Battery, Bluetooth, Cpu, Database,
+  HardDrive, Server, Smartphone, Monitor, Printer, Speaker, Headphones, Watch, Scissors, Key,
+  Lock, Unlock, Shield, Star, Heart, ThumbsUp, ThumbsDown, Smile, Frown, Meh, HelpCircle,
+  Info, AlertCircle, XCircle, ArrowRight, ArrowLeft, ArrowUp, ArrowDown, ChevronRight,
+  ChevronLeft, ChevronUp, ChevronDown, Menu, MoreHorizontal, MoreVertical, Loader, RefreshCw,
+  Upload, Download, Share, ExternalLink, Link, Paperclip, Map, Navigation, Compass, Anchor,
+  Flag, Bookmark, Tag, Hash, Percent, DollarSign, CreditCard, ShoppingCart, Gift, Package,
   Clock, Bell, Eye, EyeOff, User, UserPlus, UserMinus, UserCheck, UserX
 } from 'lucide-react';
 import { AppColor } from '../types';
@@ -126,7 +126,7 @@ const IconMap: Record<string, any> = {
   'external-link': ExternalLink,
   'link': Link,
   'paperclip': Paperclip,
-  
+
   // Maps/Nav
   'map': Map,
   'navigation': Navigation,
@@ -157,15 +157,15 @@ const IconMap: Record<string, any> = {
   'user-x': UserX
 };
 
-export const BigButton: React.FC<BigButtonProps> = ({ 
-  icon, 
+export const BigButton: React.FC<BigButtonProps> = ({
+  icon,
   iconType = 'lucide',
-  label, 
-  onClick, 
+  label,
+  onClick,
   color = 'blue',
   fullWidth = true
 }) => {
-  
+
   // Resolve Styles
   const colorMap: Record<string, string> = {
     blue: 'bg-blue-600 border-blue-800 text-white',
@@ -180,20 +180,20 @@ export const BigButton: React.FC<BigButtonProps> = ({
   };
 
   const heroMap: Record<string, string> = {
-    blue: 'bg-gradient-to-br from-blue-500 to-blue-700 text-white border-blue-800 shadow-lg',
-    green: 'bg-gradient-to-br from-green-500 to-green-700 text-white border-green-800 shadow-lg',
-    red: 'bg-gradient-to-br from-red-500 to-red-700 text-white border-red-800 shadow-lg',
-    orange: 'bg-gradient-to-br from-orange-500 to-orange-700 text-white border-orange-800 shadow-lg',
-    purple: 'bg-gradient-to-br from-purple-500 to-purple-700 text-white border-purple-800 shadow-lg',
-    gray: 'bg-slate-200 border-slate-300 text-slate-700 shadow-sm',
-    slate: 'bg-gradient-to-br from-slate-500 to-slate-700 text-white border-slate-800 shadow-lg',
-    pink: 'bg-gradient-to-br from-pink-500 to-pink-700 text-white border-pink-800 shadow-lg',
-    yellow: 'bg-gradient-to-br from-yellow-400 to-yellow-600 text-white border-yellow-700 shadow-lg',
+    blue: 'bg-blue-600 text-white border-blue-800 shadow-md',
+    green: 'bg-green-600 text-white border-green-800 shadow-md',
+    red: 'bg-red-600 text-white border-red-800 shadow-md',
+    orange: 'bg-orange-500 text-white border-orange-700 shadow-md',
+    purple: 'bg-purple-600 text-white border-purple-800 shadow-md',
+    gray: 'bg-slate-100 border-slate-300 text-slate-700 shadow-sm',
+    slate: 'bg-slate-600 text-white border-slate-800 shadow-md',
+    pink: 'bg-pink-600 text-white border-pink-800 shadow-md',
+    yellow: 'bg-yellow-500 text-white border-yellow-700 shadow-md',
   };
 
   const theme = colorMap[color as string] ? color as string : 'blue';
   const buttonClasses = heroMap[theme] || heroMap['blue'];
-  
+
   let iconContainerClasses = '';
   if (theme === 'gray') {
     iconContainerClasses = 'bg-black/5 border-black/5 text-slate-600';
@@ -210,7 +210,7 @@ export const BigButton: React.FC<BigButtonProps> = ({
   } else {
     // It's a lucide icon name or component
     const IconComponent = typeof icon === 'string' ? (IconMap[icon] || AlertTriangle) : icon;
-    RenderedIcon = <IconComponent size={fullWidth ? 36 : 32} strokeWidth={2.5} className="drop-shadow-sm" />;
+    RenderedIcon = <IconComponent size={fullWidth ? 30 : 28} strokeWidth={2.5} className="drop-shadow-sm" />;
   }
 
   return (
@@ -219,8 +219,8 @@ export const BigButton: React.FC<BigButtonProps> = ({
       className={`
         relative overflow-hidden group w-full
         flex flex-col items-center justify-center
-        py-5 px-2 rounded-3xl border-b-[6px]
-        active:border-b-0 active:translate-y-[6px] active:shadow-none
+        min-h-[116px] py-4 px-3 rounded-xl border-b-4
+        active:border-b active:translate-y-1 active:shadow-none
         transition-all duration-200
         ${buttonClasses}
         ${fullWidth ? 'mb-0' : 'aspect-square mb-0'}
@@ -228,16 +228,16 @@ export const BigButton: React.FC<BigButtonProps> = ({
     >
       <div className={`
         relative z-10 flex items-center justify-center
-        ${fullWidth ? 'w-16 h-16' : 'w-14 h-14'} rounded-2xl mb-2 border-2 backdrop-blur-md overflow-hidden
+        ${fullWidth ? 'w-14 h-14' : 'w-12 h-12'} rounded-lg mb-2 border-2 backdrop-blur-md overflow-hidden
         ${iconContainerClasses}
       `}>
         {RenderedIcon}
       </div>
 
       <span className={`
-        relative z-10 
-        ${fullWidth ? 'text-xl' : 'text-sm'} 
-        font-black uppercase text-center leading-tight tracking-tight drop-shadow-md break-words w-full px-1
+        relative z-10
+        ${label.length > 18 ? 'text-sm' : fullWidth ? 'text-base' : 'text-sm'}
+        font-black uppercase text-center leading-tight tracking-normal drop-shadow-sm break-words w-full px-1
       `}>
         {label}
       </span>

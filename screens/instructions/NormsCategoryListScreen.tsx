@@ -97,8 +97,12 @@ export const NormsCategoryListScreen: React.FC = () => {
       
       <div className="flex-1 bg-gray-100 p-4 space-y-4 overflow-y-auto">
          {docs.map(doc => (
-             <div key={doc.id} className="bg-white p-4 rounded-xl shadow-sm border border-gray-200 flex flex-col">
-                 <div className="flex items-center gap-3 overflow-hidden mb-2">
+             <div 
+               key={doc.id} 
+               onClick={() => navigate(`/norms/view/${doc.id}`, { state: { title: doc.title } })}
+               className="bg-white p-4 rounded-xl shadow-sm border border-gray-200 flex flex-col cursor-pointer hover:shadow-md active:opacity-90 transition-all"
+             >
+                 <div className="flex items-center gap-3 overflow-hidden">
                      <div className="bg-gray-100 p-3 rounded-lg text-gray-600 shrink-0">
                         {getIcon(doc.media?.type)}
                      </div>
@@ -107,22 +111,6 @@ export const NormsCategoryListScreen: React.FC = () => {
                          <p className="text-xs text-gray-400 mt-1">{new Date(doc.updatedAt).toLocaleDateString()}</p>
                      </div>
                  </div>
-                 {doc.media && (
-                   <div className="flex gap-2">
-                     <button
-                       onClick={() => navigate(`/norms/view/${doc.id}`, { state: { title: doc.title } })}
-                       className="flex-1 bg-purple-600 text-white font-bold text-xs py-3 rounded-lg flex items-center justify-center gap-1 hover:bg-purple-700 active:bg-purple-800"
-                     >
-                       <Eye size={16} /> VISUALIZAR
-                     </button>
-                     <button
-                       onClick={() => handleDownload(doc)}
-                       className="flex-1 bg-blue-600 text-white font-bold text-xs py-3 rounded-lg flex items-center justify-center gap-1 hover:bg-blue-700 active:bg-blue-800"
-                     >
-                       <Download size={16} /> BAIXAR
-                     </button>
-                   </div>
-                 )}
              </div>
          ))}
 
