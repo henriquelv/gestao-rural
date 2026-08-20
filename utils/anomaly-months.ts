@@ -18,13 +18,28 @@ export interface AnomalyDateParts {
 
 export function getAnomalyDate(value: string): Date | null {
   if (!value) return null;
-  const dateOnly = value.match(/^(\d{4})-(\d{2})-(\d{2})/);
-  if (dateOnly) {
-    const year = Number(dateOnly[1]);
-    const month = Number(dateOnly[2]);
-    const day = Number(dateOnly[3]);
-    const date = new Date(year, month - 1, day);
-    return Number.isNaN(date.getTime()) ? null : date;
+  const iso = value.match(/^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?)?/);
+  if (iso) {
+    const year = Number(iso[1]);
+    const month = Number(iso[2]);
+    const day = Number(iso[3]);
+    const hour = Number(iso[4] || 0);
+    const minute = Number(iso[5] || 0);
+    const second = Number(iso[6] || 0);
+    const millisecond = Number((iso[7] || '').padEnd(3, '0') || 0);
+    const date = new Date(year, month - 1, day, hour, minute, second, millisecond);
+    if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day) return null;
+    return date;
+  }
+
+  const legacyUs = value.match(/^(\d{2})\/(\d{2})\/(\d{4})(?:\s+(\d{2}):(\d{2})(?::(\d{2}))?)?/);
+  if (legacyUs) {
+    const month = Number(legacyUs[1]);
+    const day = Number(legacyUs[2]);
+    const year = Number(legacyUs[3]);
+    const date = new Date(year, month - 1, day, Number(legacyUs[4] || 0), Number(legacyUs[5] || 0), Number(legacyUs[6] || 0));
+    if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day) return null;
+    return date;
   }
 
   const date = new Date(value);

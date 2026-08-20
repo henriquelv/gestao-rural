@@ -171,6 +171,7 @@ const App: React.FC = () => {
 
         // Migração one-time: re-keying de IDs locais com farm_id prefix e
         // reparo de registros antigos sem contexto de fazenda.
+        await db.migrateAnomalyShape();
         await db.migrateLocalIds();
 
         // Recuperar registros que ficaram órfãos (synced=false sem entrada no outbox)

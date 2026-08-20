@@ -6,6 +6,8 @@ import { localdb } from './localdb';
 import { syncService } from './sync.service';
 import { mediaService } from './media.service';
 import { farmContextService } from './farm-context.service';
+import { normalizeAnomalies, normalizeAnomaly } from '../utils/anomaly-normalize';
+import { getAnomalyDateParts } from '../utils/anomaly-months';
 
 const isOnline = () => navigator.onLine;
 const nowISO = () => new Date().toISOString();
@@ -59,7 +61,9 @@ const clearLastRefresh = (tableName: string) => {
 };
 
 const getTimestampFieldForTable = (tableName: string): string | null => {
-  if (tableName === 'anomalies') return 'createdAt';
+  // createdAt is a business date, not a sync cursor. A full paginated fetch
+  // also recovers records imported later with an older createdAt.
+  if (tableName === 'anomalies') return null;
   if (tableName === 'instructions') return 'createdAt';
   if (tableName === 'notices') return 'createdAt';
   if (tableName === 'improvements') return 'createdAt';
@@ -106,6 +110,7 @@ const metadataTables = new Set([
   'farm_monthly_stats'
 ]);
 const smartReadHydratedKeys = new Set<string>();
+const refreshInFlight = new Map<string, Promise<boolean>>();
 
 const localRecordId = (tableName: string, row: any) => {
   const asString = (value: any) => value === undefined || value === null ? '' : String(value);
@@ -161,7 +166,7 @@ const normalizeRemoteUrls = (tableName: string, row: any) => {
     }
 
     const arr = Array.isArray(row?.media) ? row.media : [];
-    if (arr.length === 0) return row;
+    if (arr.length === 0) return { ...row, media: [] };
     const next = arr.map((m: any) => {
       if (m && !m.remoteUrl && m.remotePath) {
         return { ...m, remoteUrl: getCachedPublicUrl(m.remotePath) };
@@ -172,6 +177,55 @@ const normalizeRemoteUrls = (tableName: string, row: any) => {
   } catch {
     return row;
   }
+};
+
+export interface AnomalyAudit {
+  farmId: string | null;
+  serverTotal: number;
+  localTotal: number;
+  visibleTotal: number;
+  invalidCreatedAt: number;
+  withoutFarmId: number;
+  differentFarmId: number;
+  withoutMedia: number;
+  nullMedia: number;
+  invalidMedia: number;
+  duplicateServerIds: number;
+  unsyncedLocal: number;
+  serverOnlyIds: number;
+  localOnlyIds: number;
+  serverByMonth: Record<string, number>;
+  localByMonth: Record<string, number>;
+  visibleByMonth: Record<string, number>;
+}
+
+const countAnomalyRows = (rows: any[], farmId: string | null) => {
+  const byMonth: Record<string, number> = {};
+  let invalidCreatedAt = 0;
+  let withoutFarmId = 0;
+  let differentFarmId = 0;
+  let withoutMedia = 0;
+  let nullMedia = 0;
+  let invalidMedia = 0;
+
+  for (const row of rows) {
+    if (!getAnomalyDateParts(typeof row?.createdAt === 'string' ? row.createdAt : '')) {
+      invalidCreatedAt++;
+    } else {
+      const parts = getAnomalyDateParts(row.createdAt);
+      if (parts) {
+        const key = `${parts.year}-${String(parts.monthIndex + 1).padStart(2, '0')}`;
+        byMonth[key] = (byMonth[key] || 0) + 1;
+      }
+    }
+    if (!row?.farm_id) withoutFarmId++;
+    else if (farmId && row.farm_id !== farmId) differentFarmId++;
+    if (row?.media === undefined) withoutMedia++;
+    else if (row.media === null) nullMedia++;
+    else if (!Array.isArray(row.media)) invalidMedia++;
+  }
+
+  return { byMonth, invalidCreatedAt, withoutFarmId, differentFarmId, withoutMedia, nullMedia, invalidMedia };
 };
 
 const MOCK_SETTINGS: FarmSettings = {
@@ -261,6 +315,19 @@ const DEFAULT_EMPLOYEES_LIST: Employee[] = [
 ];
 
 async function refreshFromServer(tableName: string): Promise<boolean> {
+  const running = refreshInFlight.get(tableName);
+  if (running) return running;
+
+  const promise = refreshFromServerImpl(tableName);
+  refreshInFlight.set(tableName, promise);
+  try {
+    return await promise;
+  } finally {
+    if (refreshInFlight.get(tableName) === promise) refreshInFlight.delete(tableName);
+  }
+}
+
+async function refreshFromServerImpl(tableName: string): Promise<boolean> {
   if (!isOnline()) return false;
 
   resetRefreshMarkersForScopeChange();
@@ -279,6 +346,20 @@ async function refreshFromServer(tableName: string): Promise<boolean> {
   const runQuery = async (): Promise<any[] | null> => {
     try {
       const baseQuery = makeBaseQuery(true);
+      if (tableName === 'anomalies') {
+        const pageSize = 500;
+        const allRows: any[] = [];
+        for (let page = 0; ; page++) {
+          const from = page * pageSize;
+          const { data, error } = await (makeBaseQuery(true)
+            .order('id', { ascending: true })
+            .range(from, from + pageSize - 1) as any);
+          if (error || !data) return null;
+          allRows.push(...data);
+          if (data.length < pageSize) break;
+        }
+        return allRows;
+      }
       if (last && tsField) {
         const { data, error } = await (baseQuery
           .gte(tsField as any, last)
@@ -308,7 +389,10 @@ async function refreshFromServer(tableName: string): Promise<boolean> {
 
   if (!data) return false;
 
-  data = data.map((d: any) => normalizeRemoteUrls(tableName, d));
+  data = data
+    .map((d: any) => normalizeRemoteUrls(tableName, d))
+    .map((d: any) => tableName === 'anomalies' ? normalizeAnomaly(d) : d)
+    .filter(Boolean);
 
   const records = data.map((d: any) => ({
     id: localRecordId(tableName, d),
@@ -350,7 +434,7 @@ async function refreshFromServer(tableName: string): Promise<boolean> {
   // Nunca deleta registros synced=false (protege alterações locais pendentes).
   // ATENÇÃO: normaliza IDs removendo prefixo farm_id_ para evitar deleção indevida
   // quando servidor e local usam formatos de ID diferentes (legado vs migrado).
-  if (!tsField && data.length > 0) {
+  if (!tsField && data.length > 0 && tableName !== 'anomalies') {
     try {
       const businessKey = (id: string) => {
         const idx = id.indexOf('_');
@@ -492,19 +576,20 @@ async function smartWrite(
             }
           : {})
       };
+  const safeData = tableName === 'anomalies' ? (normalizeAnomaly(scopedData) || scopedData) : scopedData;
 
-  const id = op === 'delete' ? (localId ?? data) : localId ?? localRecordId(tableName, scopedData);
+  const id = op === 'delete' ? (localId ?? data) : localId ?? localRecordId(tableName, safeData);
 
   if (!id) {
     throw new Error(`Operação ${op} sem id em ${tableName}`);
   }
 
-  const record = { id, data: op === 'delete' ? null : scopedData, updated_at: nowISO(), synced: false, mediaTotalBytes: 0 };
+  const record = { id, data: op === 'delete' ? null : safeData, updated_at: nowISO(), synced: false, mediaTotalBytes: 0 };
 
   if (op === 'delete') await localdb.delete(tableName, id);
   else await localdb.put(tableName, record);
 
-  await localdb.addToOutbox({ tableName, op, payload: scopedData, created_at: nowISO(), status: 'pending' });
+  await localdb.addToOutbox({ tableName, op, payload: safeData, created_at: nowISO(), status: 'pending' });
 
   notify(isOnline() ? 'Salvando...' : 'Salvo offline.', 'info');
 
@@ -952,19 +1037,103 @@ export const db = {
   updateEmployee: async (e: Employee) => smartWrite('employees', e, 'update'),
   removeEmployee: async (id: string) => smartWrite('employees', id, 'delete'),
 
-  getAnomalies: async () => smartRead<Anomaly>('anomalies', [], 'createdAt'),
+  migrateAnomalyShape: async () => {
+    const FLAG = 'anomaly_shape_migration_v1';
+    try {
+      if (localStorage.getItem(FLAG)) return;
+    } catch {
+      // Continue if localStorage is unavailable; the operation is idempotent.
+    }
+
+    try {
+      const rows = await localdb.getAll<any>('anomalies');
+      for (const row of rows) {
+        const normalized = normalizeAnomaly(row);
+        if (!normalized) continue;
+        const raw = await localdb.getRawById('anomalies', String(row.id));
+        if (!raw) continue;
+        await localdb.put('anomalies', {
+          id: raw.id,
+          data: normalized,
+          updated_at: nowISO(),
+          synced: raw.synced
+        });
+      }
+      try { localStorage.setItem(FLAG, 'true'); } catch { /* ignore */ }
+    } catch (error) {
+      console.error('[AnomalyMigration] Erro ao normalizar registros locais:', error);
+    }
+  },
+  getAnomalies: async () => {
+    const rows = await smartRead<Anomaly>('anomalies', [], 'createdAt');
+    return normalizeAnomalies(rows);
+  },
+  auditAnomalies: async (): Promise<AnomalyAudit> => {
+    const farmId = farmContextService.getFarmId();
+    const localRows = await localdb.getAll<any>('anomalies');
+    const localScopedRows = farmId ? localRows.filter(row => !row?.farm_id || row.farm_id === farmId) : localRows;
+    const visibleRows = normalizeAnomalies(localScopedRows);
+    const unsyncedRows = await localdb.getUnsyncedRawRecords('anomalies');
+    const localStats = countAnomalyRows(localScopedRows, farmId);
+    const allLocalStats = countAnomalyRows(localRows, farmId);
+    const visibleStats = countAnomalyRows(visibleRows, farmId);
+
+    let serverRows: any[] = [];
+    if (isOnline()) {
+      for (let page = 0; ; page++) {
+        const pageSize = 500;
+        let query = supabase.from('anomalies').select('*').order('id', { ascending: true }).range(page * pageSize, (page + 1) * pageSize - 1);
+        if (farmId) query = query.eq('farm_id', farmId);
+        const { data, error } = await query;
+        if (error || !data) break;
+        serverRows.push(...data);
+        if (data.length < pageSize) break;
+      }
+    }
+
+    const serverStats = countAnomalyRows(serverRows, farmId);
+    const serverIds = serverRows.map(row => String(row?.id || '')).filter(Boolean);
+    const localIds = localScopedRows.map(row => String(row?.id || '')).filter(Boolean);
+    const uniqueServerIds = new Set(serverIds);
+    const localIdSet = new Set(localIds);
+    const serverOnlyIds = serverIds.filter(id => !localIdSet.has(id)).length;
+    const localOnlyIds = localIds.filter(id => !uniqueServerIds.has(id)).length;
+
+    return {
+      farmId,
+      serverTotal: serverRows.length,
+      localTotal: localScopedRows.length,
+      visibleTotal: visibleRows.length,
+      invalidCreatedAt: localStats.invalidCreatedAt,
+      withoutFarmId: allLocalStats.withoutFarmId,
+      differentFarmId: allLocalStats.differentFarmId,
+      withoutMedia: localStats.withoutMedia,
+      nullMedia: localStats.nullMedia,
+      invalidMedia: localStats.invalidMedia,
+      duplicateServerIds: serverIds.length - uniqueServerIds.size,
+      unsyncedLocal: unsyncedRows.length,
+      serverOnlyIds,
+      localOnlyIds,
+      serverByMonth: serverStats.byMonth,
+      localByMonth: localStats.byMonth,
+      visibleByMonth: visibleStats.byMonth
+    };
+  },
   addAnomaly: async (a: Anomaly) => smartWrite('anomalies', a, 'upsert'),
   updateAnomaly: async (a: Anomaly) => smartWrite('anomalies', a, 'update'),
   deleteAnomaly: async (id: string) => {
-    const item = await localdb.getById<Anomaly>('anomalies', id);
-    if (item && item.media) {
+    const item = normalizeAnomaly(await localdb.getById<Anomaly>('anomalies', id));
+    if (item) {
       for (const m of item.media) {
         await mediaService.deleteMedia(m);
       }
     }
     return smartWrite('anomalies', id, 'delete');
   },
-  getAnomalyById: async (id: string) => await localdb.getById<Anomaly>('anomalies', id),
+  getAnomalyById: async (id: string) => {
+    const row = await localdb.getById<Anomaly>('anomalies', id);
+    return normalizeAnomaly(row);
+  },
 
   getInstructions: async () => smartRead<Instruction>('instructions', [], 'createdAt'),
   addInstruction: async (i: Instruction) => smartWrite('instructions', i, 'upsert'),

@@ -23,6 +23,8 @@ export const ListAnomaliesScreen: React.FC = () => {
   const [items, setItems] = useState<Anomaly[]>([]);
   const [photoUrls, setPhotoUrls] = useState<Record<string, string>>({});
   const loadingRef = useRef(false);
+  const loadQueuedRef = useRef(false);
+  const mountedRef = useRef(false);
   const [showFilters, setShowFilters] = useState(false);
 
   // View Mode: 'list' | 'grid' | 'table'
@@ -43,27 +45,36 @@ export const ListAnomaliesScreen: React.FC = () => {
   const [sortOrder, setSortOrder] = useState<SortOrder>('desc');
 
   useEffect(() => {
-    loadData();
-    loadPhotos();
-    // Subscriber: atualiza items reativamente sem bloquear por loadingRef
-    // (o background refresh do smartRead notifica via notifyChange após bulkPut)
-    const unsub = localdb.subscribe('anomalies', async () => {
-      const data = await db.getAnomalies();
-      setItems(data);
+    mountedRef.current = true;
+    void loadData();
+    void loadPhotos();
+
+    // bulkPut() notifica uma vez por carga. Se outra carga ainda estiver lendo,
+    // aguardar a leitura atual evita resultados fora de ordem e renders tardios.
+    const unsub = localdb.subscribe('anomalies', () => {
+      void loadData();
     });
-    return () => unsub && unsub();
+    return () => {
+      mountedRef.current = false;
+      unsub && unsub();
+    };
   }, []);
 
   const loadData = async () => {
-    if (loadingRef.current) return;
+    if (loadingRef.current) {
+      loadQueuedRef.current = true;
+      return;
+    }
     loadingRef.current = true;
     try {
-      // smartRead já faz stale-while-revalidate: retorna cache local imediatamente
-      // e atualiza em background na primeira leitura da sessão.
       const data = await db.getAnomalies();
-      setItems(data);
+      if (mountedRef.current) setItems(Array.isArray(data) ? data : []);
     } finally {
       loadingRef.current = false;
+      if (loadQueuedRef.current) {
+        loadQueuedRef.current = false;
+        void loadData();
+      }
     }
   };
 
@@ -71,13 +82,14 @@ export const ListAnomaliesScreen: React.FC = () => {
     const data = await db.getAnomalies();
     const urls: Record<string, string> = {};
     for (const item of data) {
-      const photo = item.media?.find(m => m.type === 'photo');
+      const media = Array.isArray(item?.media) ? item.media : [];
+      const photo = media.find(m => m?.type === 'photo');
       if (photo) {
         const url = await mediaService.loadMediaUrl(photo);
         if (url) urls[item.id] = url;
       }
     }
-    setPhotoUrls(urls);
+    if (mountedRef.current) setPhotoUrls(urls);
   };
 
   const toggleSectorFilter = (s: SectorType) => {
@@ -104,7 +116,7 @@ export const ListAnomaliesScreen: React.FC = () => {
 
     // Filters
     if (filterSectors.length > 0) result = result.filter(i => filterSectors.includes(i.sector as SectorType));
-    if (filterResponsible) result = result.filter(i => i.responsible.toLowerCase().includes(filterResponsible.toLowerCase()));
+    if (filterResponsible) result = result.filter(i => String(i.responsible || '').toLowerCase().includes(filterResponsible.toLowerCase()));
 
     // Filter por Status de Resolução
     if (filterResolved === 'resolved') {
@@ -137,8 +149,8 @@ export const ListAnomaliesScreen: React.FC = () => {
             valA = getAnomalyTime(valA);
             valB = getAnomalyTime(valB);
         } else {
-            valA = valA.toString().toLowerCase();
-            valB = valB.toString().toLowerCase();
+          valA = String(valA || '').toLowerCase();
+          valB = String(valB || '').toLowerCase();
         }
 
         if (valA < valB) return sortOrder === 'asc' ? -1 : 1;
@@ -267,8 +279,9 @@ export const ListAnomaliesScreen: React.FC = () => {
         ) : (
             <div className={viewMode === 'grid' ? 'grid grid-cols-2 gap-3' : 'space-y-3'}>
                 {filteredItems.map((item) => {
-                    const photo = item.media.find(m => m.type === 'photo');
-                    const hasVideo = item.media.some(m => m.type === 'video');
+                  const media = Array.isArray(item?.media) ? item.media : [];
+                  const photo = media.find(m => m?.type === 'photo');
+                  const hasVideo = media.some(m => m?.type === 'video');
                     const photoUrl = photoUrls[item.id] || (photo ? mediaService.getRemoteUrl(photo) : '');
 
                     return (

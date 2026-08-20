@@ -18,7 +18,7 @@ import { useNavigate } from 'react-router-dom';
 import { Header } from '../components/Header';
 import { Layout } from '../components/Layout';
 import { activationService } from '../services/activation.service';
-import { db } from '../services/db.service';
+import { AnomalyAudit, db } from '../services/db.service';
 import { farmContextService } from '../services/farm-context.service';
 import { localdb } from '../services/localdb';
 import { notify } from '../services/notification.service';
@@ -50,6 +50,7 @@ type DiagnosticData = {
   runtimeError: any | null;
   logs: any[];
   localCounts: Record<string, number>;
+  anomalyAudit: AnomalyAudit | null;
 };
 
 const MAIN_TABLES = [
@@ -154,6 +155,12 @@ export const DiagnosticScreen: React.FC = () => {
         localdb.getOutboxSummary(),
         db.getSyncStatus()
       ]);
+      let anomalyAudit: AnomalyAudit | null = null;
+      try {
+        anomalyAudit = await db.auditAnomalies();
+      } catch (e) {
+        console.error('Erro na auditoria de anomalias:', e);
+      }
 
       const rawLogs = safeJson(localStorage.getItem('sync_diagnostic_logs_v1'));
 
@@ -172,7 +179,8 @@ export const DiagnosticScreen: React.FC = () => {
         lastSyncAt: localStorage.getItem('last_sync_at'),
         runtimeError: safeJson(localStorage.getItem('last_runtime_error')),
         logs: Array.isArray(rawLogs) ? rawLogs : [],
-        localCounts
+        localCounts,
+        anomalyAudit
       });
     } finally {
       setLoading(false);
@@ -323,6 +331,38 @@ export const DiagnosticScreen: React.FC = () => {
               <InfoRow label="Supabase URL" value={data.supabaseUrl || '(não configurado)'} />
               <InfoRow label="Conexao" value={data.online ? 'Online' : 'Offline'} />
             </section>
+
+            {data.anomalyAudit && (
+              <section className="rounded-lg border border-gray-200 bg-white p-4">
+                <div className="mb-3 flex items-center gap-2">
+                  <Database size={18} className="text-gray-500" />
+                  <h3 className="text-sm font-black uppercase text-gray-900">Anomalias</h3>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <MetricCard label="Supabase" value={data.anomalyAudit.serverTotal} tone="blue" />
+                  <MetricCard label="SQLite" value={data.anomalyAudit.localTotal} />
+                  <MetricCard label="Visíveis" value={data.anomalyAudit.visibleTotal} tone="green" />
+                  <MetricCard label="Synced=false" value={data.anomalyAudit.unsyncedLocal} tone={data.anomalyAudit.unsyncedLocal ? 'blue' : 'gray'} />
+                  <MetricCard label="Data inválida" value={data.anomalyAudit.invalidCreatedAt} tone={data.anomalyAudit.invalidCreatedAt ? 'red' : 'gray'} />
+                  <MetricCard label="Sem media" value={data.anomalyAudit.withoutMedia + data.anomalyAudit.nullMedia + data.anomalyAudit.invalidMedia} tone={data.anomalyAudit.withoutMedia + data.anomalyAudit.nullMedia + data.anomalyAudit.invalidMedia ? 'red' : 'gray'} />
+                </div>
+                <div className="mt-4 overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead><tr className="border-b text-left"><th className="p-2">Mês</th><th className="p-2">Local</th><th className="p-2">Servidor</th><th className="p-2">Visível</th></tr></thead>
+                    <tbody>
+                      {Array.from(new Set([...Object.keys(data.anomalyAudit.localByMonth), ...Object.keys(data.anomalyAudit.serverByMonth)]).values()).sort().map(month => (
+                        <tr key={month} className="border-b border-gray-100"><td className="p-2 font-bold">{month}</td><td className="p-2">{data.anomalyAudit?.localByMonth[month] || 0}</td><td className="p-2">{data.anomalyAudit?.serverByMonth[month] || 0}</td><td className="p-2">{data.anomalyAudit?.visibleByMonth[month] || 0}</td></tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="mt-3 text-xs font-semibold text-gray-600">
+                  <p>Sem farm_id: {data.anomalyAudit.withoutFarmId} | Fazenda diferente: {data.anomalyAudit.differentFarmId}</p>
+                  <p>Servidor ausente local: {data.anomalyAudit.serverOnlyIds} | Local ausente servidor: {data.anomalyAudit.localOnlyIds}</p>
+                  <p>IDs duplicados no servidor: {data.anomalyAudit.duplicateServerIds}</p>
+                </div>
+              </section>
+            )}
 
             <section className="rounded-lg border border-gray-200 bg-white p-4">
               <div className="mb-2 flex items-center gap-2">

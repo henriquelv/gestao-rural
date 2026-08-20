@@ -29,6 +29,8 @@ export const AnomalyDetailScreen: React.FC = () => {
   const [pendingAction, setPendingAction] = useState<(() => Promise<void> | void) | null>(null);
   const [resolvedByName, setResolvedByName] = useState('');
   const audioContextRef = useRef<AudioContext | null>(null);
+  const loadingRef = useRef(false);
+  const queuedRef = useRef(false);
 
   // Gestos de zoom para lightbox
   const lightboxZoomGestures = useImageZoom();
@@ -37,13 +39,26 @@ export const AnomalyDetailScreen: React.FC = () => {
     let mounted = true;
     const load = async () => {
       if (!id) return;
-      const a = await db.getAnomalyById(id);
-      if (a && mounted) setAnomaly(a);
+      if (loadingRef.current) {
+        queuedRef.current = true;
+        return;
+      }
+      loadingRef.current = true;
+      try {
+        const a = await db.getAnomalyById(id);
+        if (a && mounted) setAnomaly(a);
 
-      // Carregar lista de funcionários
-      const emps = await db.getEmployees();
-      emps.sort((a, b) => a.name.localeCompare(b.name));
-      if (mounted) setEmployees(emps);
+        // Carregar lista de funcionários
+        const emps = await db.getEmployees();
+        emps.sort((a, b) => a.name.localeCompare(b.name));
+        if (mounted) setEmployees(emps);
+      } finally {
+        loadingRef.current = false;
+        if (queuedRef.current && mounted) {
+          queuedRef.current = false;
+          void load();
+        }
+      }
     };
     load();
 
@@ -51,18 +66,24 @@ export const AnomalyDetailScreen: React.FC = () => {
       load();
     });
 
-    return () => { mounted = false; unsub && unsub(); if (audioContextRef.current) audioContextRef.current.close(); };
+    return () => {
+      mounted = false;
+      queuedRef.current = false;
+      unsub && unsub();
+      if (audioContextRef.current) audioContextRef.current.close();
+    };
   }, [id]);
 
   useEffect(() => {
     const run = async () => {
-      if (!anomaly?.media?.length) {
+      const media = Array.isArray(anomaly?.media) ? anomaly.media : [];
+      if (media.length === 0) {
         setMediaUrls({});
         return;
       }
 
       const entries = await Promise.all(
-        anomaly.media.map(async (m) => {
+        media.map(async (m) => {
           try {
             const url = await mediaService.loadMediaUrl(m);
             return [m.id, url] as const;
@@ -179,8 +200,9 @@ export const AnomalyDetailScreen: React.FC = () => {
   if (!anomaly) return <Layout><div className="p-10 text-center">Carregando...</div></Layout>;
 
   // Separate visual media from documents
-  const visualMedia = anomaly.media.filter(m => m.type === 'photo' || m.type === 'video');
-  const docMedia = anomaly.media.filter(m => ['pdf', 'doc', 'ppt'].includes(m.type));
+  const media = Array.isArray(anomaly.media) ? anomaly.media : [];
+  const visualMedia = media.filter(m => m?.type === 'photo' || m?.type === 'video');
+  const docMedia = media.filter(m => ['pdf', 'doc', 'ppt'].includes(m?.type));
   const mediaUrl = (m: MediaItem) => {
     const cached = m.id ? (mediaUrls[m.id] || '') : '';
     return cached || m.remoteUrl || m.uri || '';
@@ -229,7 +251,7 @@ export const AnomalyDetailScreen: React.FC = () => {
             <h3 className="flex items-center text-lg font-bold text-gray-800"><FileText className="mr-2 text-gray-400" /> Descrição</h3>
             <button onClick={handleSpeak} disabled={isPlayingTTS} className={`p-2 rounded-full transition-all ${isPlayingTTS ? 'bg-green-100 text-green-600 animate-pulse' : 'bg-gray-100 text-gray-600'}`}><Volume2 size={24} /></button>
           </div>
-          <p className="text-gray-800 text-lg leading-relaxed whitespace-pre-wrap">{anomaly.description}</p>
+          <p className="text-gray-800 text-lg leading-relaxed whitespace-pre-wrap">{String(anomaly.description || '')}</p>
         </div>
 
         {anomaly.immediateSolution && (

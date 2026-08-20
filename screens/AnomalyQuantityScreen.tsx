@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Layout } from '../components/Layout';
 import { Header } from '../components/Header';
 import { db } from '../services/db.service';
@@ -19,7 +19,9 @@ type ViewMode = 'chart' | 'table' | 'period';
 
 export const AnomalyQuantityScreen: React.FC = () => {
   const [anomalies, setAnomalies] = useState<Anomaly[]>([]);
-  const [closedMonths, setClosedMonths] = useState<Record<string, Record<SectorType, number>>>({});
+  const loadingRef = useRef(false);
+  const queuedRef = useRef(false);
+  const mountedRef = useRef(false);
   
   // Filtros
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -35,41 +37,35 @@ export const AnomalyQuantityScreen: React.FC = () => {
     return `${y}-${m}-${d}`;
   });
 
-  // Carregar meses fechados do localStorage
-  useEffect(() => {
-    try {
-      const saved = localStorage.getItem('closedMonths');
-      if (saved) {
-        setClosedMonths(JSON.parse(saved));
-      }
-    } catch (e) {
-      console.error('Erro ao carregar meses fechados:', e);
-    }
-  }, []);
-
-  // Salvar meses fechados quando mudar
-  useEffect(() => {
-    try {
-      localStorage.setItem('closedMonths', JSON.stringify(closedMonths));
-    } catch (e) {
-      console.error('Erro ao salvar meses fechados:', e);
-    }
-  }, [closedMonths]);
-
   const loadAnomalies = async () => {
+    if (loadingRef.current) {
+      queuedRef.current = true;
+      return;
+    }
+    loadingRef.current = true;
     try {
       const data = await db.getAnomalies();
-      setAnomalies(Array.isArray(data) ? data : []);
+      if (mountedRef.current) setAnomalies(Array.isArray(data) ? data : []);
     } catch (e) {
       console.error('Erro ao carregar anomalias:', e);
       notify('Erro ao carregar dados', 'error');
+    } finally {
+      loadingRef.current = false;
+      if (queuedRef.current) {
+        queuedRef.current = false;
+        void loadAnomalies();
+      }
     }
   };
 
   useEffect(() => {
-    loadAnomalies();
+    mountedRef.current = true;
+    void loadAnomalies();
     const unsub = localdb.subscribe('anomalies', loadAnomalies);
-    return () => unsub?.();
+    return () => {
+      mountedRef.current = false;
+      unsub?.();
+    };
   }, []);
 
   // Filtrar anomalias por período
