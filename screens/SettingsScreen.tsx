@@ -14,6 +14,7 @@ import { PinRequestModal } from '../components/PinRequestModal';
 import { DEFAULT_SECTOR_BASE_COLOR, getSectorColorOverrides, setSectorColorOverrides, makeSectorColor, getSectorColors } from '../constants/sectors';
 import { farmContextService } from '../services/farm-context.service';
 import { AdminPanel } from '../components/AdminPanel';
+import { localdb } from '../services/localdb';
 
 type Tab = 'dashboard' | 'admin' | 'registries' | 'visual' | 'data' | 'records';
 type SubTab = 'employees' | 'sectors';
@@ -250,6 +251,18 @@ export const SettingsScreen: React.FC = () => {
     }
   };
 
+  useEffect(() => {
+    const reload = () => {
+      void loadRegistries();
+    };
+    const unsubscribeEmployees = localdb.subscribe('employees', reload);
+    const unsubscribeSectors = localdb.subscribe('sectors', reload);
+    return () => {
+      unsubscribeEmployees();
+      unsubscribeSectors();
+    };
+  }, []);
+
   const loadUI = async () => {
     setUiConfig(await db.getUIConfig());
   };
@@ -417,15 +430,26 @@ export const SettingsScreen: React.FC = () => {
   };
 
   const handleSaveEmp = async () => {
-    if (!empName) { notify("Preencha o Nome", "error"); return; }
+    const currentFarmId = farmContextService.getFarmId();
+    const name = empName.trim();
+    if (!name) { notify("Preencha o Nome", "error"); return; }
+    if (!currentFarmId || currentFarmId === 'owner') {
+      notify("Use o Painel Admin para cadastrar funcionário em uma fazenda.", "error");
+      return;
+    }
 
     protectedAction(async () => {
       try {
+        const now = new Date().toISOString();
         const newEmp: Employee = {
           id: editingEmp ? editingEmp.id : crypto.randomUUID(),
-          name: empName,
+          farm_id: currentFarmId,
+          name,
           role: (empRole || 'Colaborador'),
-          photoUri: empPhoto
+          status: editingEmp?.status || 'active',
+          photoUri: empPhoto,
+          created_at: editingEmp?.created_at || now,
+          updated_at: now
         };
 
         if (editingEmp) {
@@ -436,6 +460,11 @@ export const SettingsScreen: React.FC = () => {
           await db.addEmployee(newEmp);
         }
 
+        if (navigator.onLine) {
+          await db.syncPendingData();
+          await db.forceRefreshTable('employees');
+        }
+        await loadRegistries();
         handleClearEmpForm();
         notify("Funcionário salvo!", "success");
       } catch (e) {

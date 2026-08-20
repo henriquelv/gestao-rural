@@ -108,7 +108,7 @@ export const syncService = {
 
   repairPayloadContext(payload: any, tableName: string): any {
     if (!payload || typeof payload !== 'object') return payload;
-    const farmScoped = ['anomalies', 'instructions', 'notices', 'improvements', 'farm_docs', 'milk_daily', 'daily_metrics', 'farm_monthly_stats', 'sectors', 'settings', 'farm_settings'];
+    const farmScoped = ['employees', 'anomalies', 'instructions', 'notices', 'improvements', 'farm_docs', 'milk_daily', 'daily_metrics', 'farm_monthly_stats', 'sectors', 'settings', 'farm_settings'];
     const metadataTables = ['anomalies', 'instructions', 'notices', 'improvements', 'farm_docs', 'milk_daily', 'daily_metrics', 'farm_monthly_stats'];
     if (!farmScoped.includes(tableName)) return payload;
 
@@ -118,6 +118,17 @@ export const syncService = {
     const next = { ...payload };
     let changed = false;
     if (!next.farm_id) { next.farm_id = ctx.farm_id; changed = true; }
+    if (tableName === 'employees') {
+      if (!next.status) { next.status = 'active'; changed = true; }
+      if (!next.role) { next.role = 'Colaborador'; changed = true; }
+      if (typeof next.name === 'string') {
+        const trimmedName = next.name.trim();
+        if (trimmedName !== next.name) {
+          next.name = trimmedName;
+          changed = true;
+        }
+      }
+    }
     if (metadataTables.includes(tableName)) {
       if (next.employee_id && typeof next.employee_id !== 'string') { next.employee_id = String(next.employee_id); changed = true; }
       if (!next.employee_id && ctx.employee_id) { next.employee_id = String(ctx.employee_id); changed = true; }

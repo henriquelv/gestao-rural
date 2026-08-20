@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import { Layout } from '../../components/Layout';
 import { Header } from '../../components/Header';
 import { FieldLabel } from '../../components/FieldLabel';
@@ -14,6 +14,21 @@ import { farmContextService } from '../../services/farm-context.service';
 interface DataMetricScreenProps {
   type: 'milk' | 'lactation' | 'discard' | 'births';
 }
+
+const MONTH_NAMES = [
+  'Janeiro',
+  'Fevereiro',
+  'Março',
+  'Abril',
+  'Maio',
+  'Junho',
+  'Julho',
+  'Agosto',
+  'Setembro',
+  'Outubro',
+  'Novembro',
+  'Dezembro'
+];
 
 export const DataMetricScreen: React.FC<DataMetricScreenProps> = ({ type }) => {
   const [history, setHistory] = useState<any[]>([]);
@@ -34,6 +49,7 @@ export const DataMetricScreen: React.FC<DataMetricScreenProps> = ({ type }) => {
   const [isReplacing, setIsReplacing] = useState(false);
   const [pendingReplaceAction, setPendingReplaceAction] = useState<(() => Promise<void>) | null>(null);
   const [showMonthPicker, setShowMonthPicker] = useState(false);
+  const [showAnnualMilkSummary, setShowAnnualMilkSummary] = useState(false);
   
   const MONTH_KEY = `selectedMonth_${farmContextService.getFarmId() || 'default'}`;
 
@@ -238,6 +254,30 @@ export const DataMetricScreen: React.FC<DataMetricScreenProps> = ({ type }) => {
   };
 
   const dailyList = getDailyListData();
+
+  const selectedYear = Number(selectedMonth.split('-')[0]) || new Date().getFullYear();
+
+  const annualMilkSummary = useMemo(() => {
+    const yearPrefix = `${selectedYear}-`;
+    const milkRows = history
+      .filter((row: any) => String(row?.date || '').startsWith(yearPrefix))
+      .filter((row: any) => Number.isFinite(Number((row as DailyMilk).liters)));
+
+    const months = MONTH_NAMES.map((name, index) => {
+      const month = String(index + 1).padStart(2, '0');
+      const rows = milkRows.filter((row: any) => String(row.date || '').slice(5, 7) === month);
+      const total = rows.reduce((sum: number, row: any) => sum + (Number(row.liters) || 0), 0);
+      const recordedDays = rows.length;
+      const average = recordedDays > 0 ? total / recordedDays : 0;
+      return { name, month, total, recordedDays, average };
+    });
+
+    const total = months.reduce((sum, month) => sum + month.total, 0);
+    const recordedDays = months.reduce((sum, month) => sum + month.recordedDays, 0);
+    const average = recordedDays > 0 ? total / recordedDays : 0;
+
+    return { months, total, recordedDays, average };
+  }, [history, selectedYear]);
 
   const exportCSV = () => {
     try {
@@ -516,6 +556,51 @@ export const DataMetricScreen: React.FC<DataMetricScreenProps> = ({ type }) => {
             </div>
         </div>
 
+        {type === 'milk' && (
+          <div className="px-4 pt-4">
+            <section className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+              <div className="flex items-center justify-between gap-3 px-4 py-3">
+                <div className="flex min-w-0 items-center gap-3">
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-blue-50">
+                    <BarChart2 size={20} className="text-blue-700" />
+                  </div>
+                  <div className="min-w-0">
+                    <h3 className="truncate text-sm font-black text-gray-900">Produção anual de leite</h3>
+                    <p className="text-xs font-semibold text-gray-500">Resumo dos lançamentos de {selectedYear}</p>
+                  </div>
+                </div>
+                <span className="shrink-0 rounded-md bg-gray-100 px-2.5 py-1 text-xs font-black text-gray-700">
+                  {selectedYear}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-2 border-y border-gray-100">
+                <div className="px-4 py-3">
+                  <p className="text-[11px] font-bold uppercase text-gray-500">Total</p>
+                  <p className="mt-0.5 text-xl font-black text-gray-900">
+                    {formatNumber(annualMilkSummary.total)} <span className="text-xs font-bold text-gray-500">L</span>
+                  </p>
+                </div>
+                <div className="border-l border-gray-100 px-4 py-3">
+                  <p className="text-[11px] font-bold uppercase text-gray-500">Média diária</p>
+                  <p className="mt-0.5 text-xl font-black text-blue-700">
+                    {formatNumber(annualMilkSummary.average)} <span className="text-xs font-bold text-blue-600">L/dia</span>
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setShowAnnualMilkSummary(true)}
+                className="flex min-h-12 w-full items-center justify-center gap-2 bg-blue-50 px-4 py-3 text-sm font-black text-blue-700 transition active:bg-blue-100"
+              >
+                <Calendar size={17} />
+                Ver médias mês a mês
+              </button>
+            </section>
+          </div>
+        )}
+
         {/* Gráfico com scroll horizontal */}
         <div className="p-4">
           <div className="bg-white p-5 rounded-xl shadow-md border border-gray-200 overflow-x-auto">
@@ -573,6 +658,74 @@ export const DataMetricScreen: React.FC<DataMetricScreenProps> = ({ type }) => {
           </div>
         </div>
       </div>
+
+      {type === 'milk' && showAnnualMilkSummary && (
+        <div
+          className="fixed inset-0 z-[70] flex items-end bg-black/55 sm:items-center sm:justify-center sm:p-4"
+          onClick={() => setShowAnnualMilkSummary(false)}
+        >
+          <div
+            className="flex max-h-[90dvh] w-full flex-col overflow-hidden rounded-t-2xl bg-white shadow-2xl sm:max-w-md sm:rounded-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-center justify-between gap-3 border-b border-gray-200 px-4 py-4">
+              <div>
+                <p className="text-xs font-bold uppercase text-blue-700">Produção de leite</p>
+                <h2 className="text-lg font-black text-gray-900">Médias mensais de {selectedYear}</h2>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowAnnualMilkSummary(false)}
+                aria-label="Fechar resumo anual"
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-gray-100 text-gray-700 transition active:bg-gray-200"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 border-b border-gray-200 bg-gray-50">
+              <div className="px-4 py-3">
+                <p className="text-[11px] font-bold uppercase text-gray-500">Total no ano</p>
+                <p className="mt-1 text-xl font-black text-gray-900">
+                  {formatNumber(annualMilkSummary.total)} <span className="text-xs font-bold text-gray-500">L</span>
+                </p>
+              </div>
+              <div className="border-l border-gray-200 px-4 py-3">
+                <p className="text-[11px] font-bold uppercase text-gray-500">Média no ano</p>
+                <p className="mt-1 text-xl font-black text-blue-700">
+                  {formatNumber(annualMilkSummary.average)} <span className="text-xs font-bold text-blue-600">L/dia</span>
+                </p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-[1fr_auto] border-b border-gray-200 bg-white px-4 py-2 text-[11px] font-bold uppercase text-gray-500">
+              <span>Mês</span>
+              <span>Média diária</span>
+            </div>
+
+            <div className="overflow-y-auto overscroll-contain">
+              {annualMilkSummary.months.map((month) => (
+                <div
+                  key={month.month}
+                  className="grid min-h-14 grid-cols-[1fr_auto] items-center gap-4 border-b border-gray-100 px-4 py-2.5 last:border-b-0"
+                >
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-black text-gray-800">{month.name}</p>
+                    <p className="text-[11px] font-semibold text-gray-400">
+                      {month.recordedDays > 0
+                        ? `${month.recordedDays} ${month.recordedDays === 1 ? 'dia lançado' : 'dias lançados'}`
+                        : 'Sem lançamentos'}
+                    </p>
+                  </div>
+                  <p className={`text-right text-base font-black ${month.recordedDays > 0 ? 'text-blue-700' : 'text-gray-300'}`}>
+                    {formatNumber(month.average)} <span className="text-[11px] font-bold">L/dia</span>
+                  </p>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
 
       {editingEntry && (
         <div className="fixed inset-0 z-[70] bg-black/60 flex items-center justify-center p-4 animate-in fade-in">
