@@ -113,7 +113,7 @@ export const OwnerDashboardScreen: React.FC = () => {
   };
 
   const updateAdminPin = async (farmId: string, adminId: string, newPin: string) => {
-    if (!newPin.trim()) { notify('Informe um PIN válido.', 'error'); return; }
+    if (!/^\d{4}$/.test(newPin.trim())) { notify('O PIN deve ter exatamente 4 números.', 'error'); return; }
     setBusy(`pin_${adminId}`);
     try {
       const { error } = await supabase
@@ -337,9 +337,11 @@ const AdminPinEditor: React.FC<{
   return (
     <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 flex items-center gap-2">
       <input
-        type="text"
+        type="tel"
+        inputMode="numeric"
+        maxLength={4}
         value={pin}
-        onChange={e => setPin(e.target.value)}
+        onChange={e => setPin(e.target.value.replace(/\D/g, ''))}
         placeholder="Novo PIN"
         className="flex-1 p-2 rounded-lg border border-blue-200 text-sm font-bold outline-none focus:border-blue-500 bg-white"
         autoFocus

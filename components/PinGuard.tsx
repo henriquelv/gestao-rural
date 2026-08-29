@@ -15,14 +15,19 @@ export const PinGuard: React.FC<PinGuardProps> = ({ children, title = "Acesso Re
   // Verifica estado inicial
   const [isUnlocked, setIsUnlocked] = useState(authService.isAuthenticated());
   const [pin, setPin] = useState('');
+  const [errorMessage, setErrorMessage] = useState('');
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
-    if (authService.login(pin)) {
+    const result = authService.loginWithResult(pin);
+    if (result.ok) {
+      setErrorMessage('');
       setIsUnlocked(true);
       notify("Acesso liberado", "success");
     } else {
-      notify("PIN Incorreto", "error");
+      const message = result.message || 'Acesso não autorizado.';
+      setErrorMessage(message);
+      notify(message, "error");
       setPin('');
     }
   };
@@ -47,13 +52,20 @@ export const PinGuard: React.FC<PinGuardProps> = ({ children, title = "Acesso Re
               <form onSubmit={handleLogin}>
                   <input 
                     type="tel" 
+                    inputMode="numeric"
+                    pattern="[0-9]*"
                     maxLength={4} 
                     value={pin}
-                    onChange={e => setPin(e.target.value)}
+                    onChange={e => { setPin(e.target.value.replace(/\D/g, '')); setErrorMessage(''); }}
                     className="w-full text-center text-4xl font-black tracking-[0.5em] p-4 bg-gray-50 rounded-xl border-2 border-gray-200 focus:border-blue-500 focus:bg-white transition-all outline-none mb-6"
                     placeholder="••••"
                     autoFocus
                   />
+                  {errorMessage && (
+                    <div role="alert" className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-center text-sm font-bold text-red-700">
+                      {errorMessage}
+                    </div>
+                  )}
                   <button type="submit" className="w-full bg-blue-600 active:bg-blue-700 text-white font-black text-xl py-4 rounded-xl shadow-lg flex items-center justify-center gap-2">
                       DESBLOQUEAR <ArrowRight />
                   </button>

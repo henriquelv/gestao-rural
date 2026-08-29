@@ -17,6 +17,7 @@ out/
 .vercel
 .netlify
 release/
+builds/
 
 # Android
 android/app/build/
@@ -34,12 +35,14 @@ android/captures/
 # IDEs
 .vscode/
 .idea/
+.claude/settings.local.json
 *.swp
 *.bak
 *.tmp
 *.temp
 .DS_Store
 Thumbs.db
+/gestao-smoke.png
 
 # Vite / React
 .vite/

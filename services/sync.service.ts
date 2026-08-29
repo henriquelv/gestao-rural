@@ -6,6 +6,8 @@ import { db } from './db.service';
 import { MediaItem } from '../types';
 import { activationService } from './activation.service';
 import { farmContextService } from './farm-context.service';
+import { getLocalRecordId } from '../utils/local-record-id';
+import { isRecoverableSyncError } from '../utils/sync-errors';
 
 const guessExt = (m: MediaItem) => {
   const mime = m.mimeType || '';
@@ -60,36 +62,19 @@ const getConflictTargets = (tableName: string): string[] => {
   }
 };
 
-const getLocalRecordId = (tableName: string, payload: any): string | null => {
-  if (typeof payload === 'string') return payload;
-  if (!payload || typeof payload !== 'object') return null;
-
-  if (tableName === 'ui_config' || tableName === 'settings' || tableName === 'farm_settings') {
-    const id = payload.id ?? '1';
-    return payload.farm_id ? `${payload.farm_id}_${id}` : String(id);
+const publishAccessStatus = (message: string | null) => {
+  try {
+    if (message) localStorage.setItem('last_access_error_v1', message);
+    else localStorage.removeItem('last_access_error_v1');
+  } catch {
+    // O evento ainda informa a tela quando o localStorage está indisponível.
   }
-  if (tableName === 'sectors') {
-    const name = payload.name ?? payload.id;
-    if (!name) return null;
-    return payload.farm_id ? `${payload.farm_id}_${name}` : String(name);
-  }
-  if (tableName === 'milk_daily' && payload.date) {
-    return payload.farm_id ? `${payload.farm_id}_${payload.date}` : payload.date;
-  }
-  if (tableName === 'daily_metrics' && payload.date && payload.type) {
-    return payload.farm_id ? `${payload.farm_id}_${payload.date}_${payload.type}` : `${payload.date}_${payload.type}`;
-  }
-  if (tableName === 'farm_monthly_stats' && payload.monthKey) {
-    return payload.farm_id ? `${payload.farm_id}_${payload.monthKey}` : payload.monthKey;
-  }
-  if (payload.id) return String(payload.id);
-  if (payload.date) return String(payload.date);
-  if (payload.name) return String(payload.name);
-  return null;
+  window.dispatchEvent(new CustomEvent('app-access-status', { detail: { message } }));
 };
 
 export const syncService = {
   _isSyncing: false,
+  _syncPromise: null as Promise<{ ok: boolean; count: number }> | null,
 
   log(message: string, detail?: any): void {
     try {
@@ -108,7 +93,7 @@ export const syncService = {
 
   repairPayloadContext(payload: any, tableName: string): any {
     if (!payload || typeof payload !== 'object') return payload;
-    const farmScoped = ['anomalies', 'instructions', 'notices', 'improvements', 'farm_docs', 'milk_daily', 'daily_metrics', 'farm_monthly_stats', 'sectors', 'settings', 'farm_settings'];
+    const farmScoped = ['ui_config', 'employees', 'anomalies', 'instructions', 'notices', 'improvements', 'farm_docs', 'milk_daily', 'daily_metrics', 'farm_monthly_stats', 'sectors', 'settings', 'farm_settings'];
     const metadataTables = ['anomalies', 'instructions', 'notices', 'improvements', 'farm_docs', 'milk_daily', 'daily_metrics', 'farm_monthly_stats'];
     if (!farmScoped.includes(tableName)) return payload;
 
@@ -130,20 +115,10 @@ export const syncService = {
 
   async retryRecoverableErrors(): Promise<void> {
     try {
-      const errors = await localdb.getOutboxErrors(100);
-      const retryable = errors.filter((item: any) => {
-        const msg = String(item?.errorMessage || '').toLowerCase();
-        return msg.includes('[media_pending]')
-          || msg.includes('employee_id')
-          || msg.includes('employee_name')
-          || msg.includes('device_id')
-          || msg.includes('schema cache')
-          || msg.includes('column')
-          || msg.includes('invalid input syntax')
-          || msg.includes('bigint')
-          || msg.includes('settings')
-          || msg.includes('sectors');
-      });
+      // Alguns aparelhos ficaram vários dias acumulando erros. Examinar todos os
+      // itens preservados evita que os mais antigos fiquem fora do retry automático.
+      const errors = await localdb.getOutboxErrors(10000);
+      const retryable = errors.filter(isRecoverableSyncError);
 
       for (const item of retryable) {
         if (item.id) await localdb.retryOutboxItem(item.id);
@@ -160,9 +135,28 @@ export const syncService = {
   },
 
   async syncAll(): Promise<{ ok: boolean; count: number }> {
-    if (this._isSyncing) {
-      console.log('Sincronização já em andamento, pulando...');
-      return { ok: true, count: 0 };
+    if (this._syncPromise) {
+      this.log('SYNC_JOIN_EXISTING');
+      return this._syncPromise;
+    }
+
+    this._syncPromise = this.syncAllImpl();
+    try {
+      return await this._syncPromise;
+    } finally {
+      this._syncPromise = null;
+      this._isSyncing = false;
+    }
+  },
+
+  async syncAllImpl(): Promise<{ ok: boolean; count: number }> {
+    this._isSyncing = true;
+    this.log('SYNC_START');
+
+    try {
+      localStorage.setItem('last_sync_attempt_at', new Date().toISOString());
+    } catch {
+      // Diagnostic timestamp is optional.
     }
 
     if (!navigator.onLine) return { ok: false, count: 0 };
@@ -184,14 +178,19 @@ export const syncService = {
         code: error?.code,
         details: error?.details
       });
-      notify('Nao foi possivel validar o acesso para sincronizar.', 'error');
+      const message = 'Não foi possível validar o acesso para sincronizar.';
+      publishAccessStatus(message);
+      notify(message, 'error');
       return { ok: false, count: 0 };
     }
     if (!access.ok) {
       this.log('Sincronizacao bloqueada na validacao de acesso', access);
-      notify(access.message || 'Acesso temporariamente bloqueado. Entre em contato com o administrador.', 'error');
+      const message = access.message || 'Acesso temporariamente bloqueado. Entre em contato com o administrador.';
+      publishAccessStatus(message);
+      notify(message, 'error');
       return { ok: false, count: 0 };
     }
+    publishAccessStatus(null);
 
     await this.retryRecoverableErrors();
 
@@ -206,14 +205,17 @@ export const syncService = {
       return { ok: true, count: 0 };
     }
 
-    this._isSyncing = true;
     let successCount = 0;
     let failCount = 0;
 
-    try {
-      for (const item of pendingItems) {
+    for (const item of pendingItems) {
         try {
-          const repairedPayload = this.repairPayloadContext(item.payload, item.tableName);
+          if (item.payloadParseError || !item.payload) {
+            throw new Error(item.payloadParseError || 'Payload local vazio; item preservado para diagnostico.');
+          }
+          const repairedPayload = item.op === 'delete'
+            ? item.payload
+            : this.repairPayloadContext(item.payload, item.tableName);
           if (item.id && repairedPayload !== item.payload) {
             await localdb.updateOutboxPayload(item.id, repairedPayload);
           }
@@ -242,6 +244,8 @@ export const syncService = {
               );
             }
             await this.markAsPendingMedia(item.tableName, updatedPayload);
+          } else if (item.op === 'delete') {
+            if (item.id) await localdb.deleteOutboxItem(item.id);
           } else {
             if (item.id) await localdb.deleteOutboxItem(item.id);
             await this.markAsSynced(item.tableName, updatedPayload);
@@ -258,21 +262,24 @@ export const syncService = {
           });
           failCount++;
           if (item.id) {
-            await localdb.markOutboxError(item.id, error.message || 'Erro desconhecido');
+            try {
+              await localdb.markOutboxError(item.id, error.message || 'Erro desconhecido');
+            } catch (markError) {
+              console.error(`Nao foi possivel marcar erro no item ${item.id}:`, markError);
+            }
           }
         }
-      }
-    } finally {
-      this._isSyncing = false;
     }
 
     if (successCount > 0) notify(`${successCount} itens sincronizados.`, 'success');
     if (failCount > 0) notify(`${failCount} falharam na sincronização.`, 'error');
     this.log('Sync finalizado', { successCount, failCount });
-    try {
-      localStorage.setItem('last_sync_at', new Date().toISOString());
-    } catch {
-      // ignore
+    if (failCount === 0) {
+      try {
+        localStorage.setItem('last_sync_at', new Date().toISOString());
+      } catch {
+        // ignore
+      }
     }
 
     return { ok: failCount === 0, count: successCount };
@@ -300,57 +307,55 @@ export const syncService = {
     const BUCKET = 'media';
 
     for (const m of inputMedia) {
-      if (!m.remotePath) {
-        const blob = await mediaService.readMediaData(m);
-        if (blob) {
-          const ext = guessExt(m);
-          const farmId = payload.farm_id || farmContextService.getFarmId();
-          const path = farmId
-            ? `farms/${farmId}/${tableName}/${payload.id}/${m.id}.${ext}`
-            : `${tableName}/${payload.id}/${m.id}.${ext}`;
+      try {
+        if (!m.remotePath) {
+          const blob = await mediaService.readMediaData(m);
+          if (blob) {
+            const ext = guessExt(m);
+            const farmId = payload.farm_id || farmContextService.getFarmId();
+            const recordId = payload.id || payload.date || payload.monthKey || 'record';
+            const path = farmId
+              ? `farms/${farmId}/${tableName}/${recordId}/${m.id}.${ext}`
+              : `${tableName}/${recordId}/${m.id}.${ext}`;
 
-          const { error } = await supabase.storage.from(BUCKET).upload(path, blob, { upsert: true });
+            const { error } = await supabase.storage.from(BUCKET).upload(path, blob, { upsert: true });
 
-          if (error) {
-            console.error('Upload falhou', error);
-            this.log('Upload de midia falhou; registro textual continua', {
-              tableName,
-              recordId: payload?.id || payload?.date || payload?.name || null,
-              mediaId: m.id,
-              message: error.message
-            });
+            if (error) {
+              console.error('Upload falhou', error);
+              this.log('Upload de midia falhou; registro textual continua', {
+                tableName,
+                recordId,
+                mediaId: m.id,
+                message: error.message
+              });
+              updatedMedia.push({ ...m, pendingUpload: true });
+              continue;
+            }
+
+            const { data: publicUrlData } = supabase.storage.from(BUCKET).getPublicUrl(path);
             updatedMedia.push({
               ...m,
-              pendingUpload: true
+              remotePath: path,
+              remoteUrl: publicUrlData.publicUrl,
+              pendingUpload: false
             });
-            continue;
+          } else {
+            updatedMedia.push({ ...m, pendingUpload: true });
           }
-
-          const { data: publicUrlData } = supabase.storage.from(BUCKET).getPublicUrl(path);
-
-          updatedMedia.push({
-            ...m,
-            remotePath: path,
-            remoteUrl: publicUrlData.publicUrl,
-            pendingUpload: false
-          });
         } else {
-          updatedMedia.push({
-            ...m,
-            pendingUpload: true
-          });
-        }
-      } else {
-        // Garantir URL pública mesmo para registros antigos que tinham remotePath mas não tinham remoteUrl
-        if (!m.remoteUrl) {
+          // remoteUrl pode apontar para o Supabase antigo. remotePath e o projeto
+          // configurado nesta build são a fonte de verdade para a URL pública.
           const { data: publicUrlData } = supabase.storage.from(BUCKET).getPublicUrl(m.remotePath);
-          updatedMedia.push({
-            ...m,
-            remoteUrl: publicUrlData.publicUrl
-          });
-        } else {
-          updatedMedia.push(m);
+          updatedMedia.push({ ...m, remoteUrl: publicUrlData.publicUrl || m.remoteUrl });
         }
+      } catch (error: any) {
+        this.log('Erro isolado de midia; registro textual continua', {
+          tableName,
+          recordId: payload?.id || payload?.date || payload?.name || null,
+          mediaId: m?.id,
+          message: error?.message || String(error)
+        });
+        updatedMedia.push({ ...m, pendingUpload: true });
       }
     }
 
@@ -365,7 +370,10 @@ export const syncService = {
     const table = supabase.from(remoteTableName);
     let result;
 
-    const cleanPayload = item.payload && typeof item.payload === 'object' ? { ...item.payload } : {};
+    if (!item.payload || typeof item.payload !== 'object') {
+      throw new Error('Payload local invalido; item preservado no outbox.');
+    }
+    const cleanPayload = { ...item.payload };
     delete cleanPayload.tempLocal;
 
     if (item.tableName === 'settings') {
@@ -406,31 +414,18 @@ export const syncService = {
         result = await upsertWithConflictFallback(table, cleanPayload, getConflictTargets(item.tableName));
         break;
       case 'delete':
+      {
+        const deletePayload = item.payload && typeof item.payload === 'object' ? item.payload : null;
         if (item.tableName === 'sectors') {
-          const delSectorFarmId = farmContextService.getFarmId();
-          result = delSectorFarmId
-            ? await table.delete().eq('name', item.payload).eq('farm_id', delSectorFarmId)
-            : await table.delete().eq('name', item.payload);
+          if (!deletePayload?.farm_id) throw new Error('DELETE de setor sem farm_id imutável');
+          result = await table.delete().eq('name', deletePayload.name || deletePayload.id).eq('farm_id', deletePayload.farm_id);
         } else if (item.tableName === 'milk_daily') {
-          const delMilkFarmId = farmContextService.getFarmId();
-          result = delMilkFarmId
-            ? await table.delete().eq('date', item.payload).eq('farm_id', delMilkFarmId)
-            : await table.delete().eq('date', item.payload);
+          if (!deletePayload?.farm_id || !deletePayload.date) throw new Error('DELETE de leite sem identidade imutável');
+          result = await table.delete().eq('date', deletePayload.date).eq('farm_id', deletePayload.farm_id);
         } else if (item.tableName === 'daily_metrics') {
-          const p = (item.payload || '').toString();
-          if (p.includes('_')) {
-            const sepIdx = p.lastIndexOf('_');
-            const date = p.slice(0, sepIdx);
-            const type = p.slice(sepIdx + 1);
-            const delMetricFarmId = farmContextService.getFarmId();
-            result = delMetricFarmId
-              ? await table.delete().eq('date', date).eq('type', type).eq('farm_id', delMetricFarmId)
-              : await table.delete().eq('date', date).eq('type', type);
-          } else {
-            result = await table.delete().eq('id', item.payload);
-          }
+          if (!deletePayload?.farm_id || !deletePayload.date || !deletePayload.type) throw new Error('DELETE de métrica sem identidade imutável');
+          result = await table.delete().eq('date', deletePayload.date).eq('type', deletePayload.type).eq('farm_id', deletePayload.farm_id);
         } else {
-          const deleteFarmId = farmContextService.getFarmId();
           const farmScopedDeleteTables = [
             'employees',
             'anomalies',
@@ -443,12 +438,15 @@ export const syncService = {
             'settings',
             'farm_settings'
           ];
-          const query = table.delete().eq('id', item.payload);
-          result = deleteFarmId && farmScopedDeleteTables.includes(item.tableName)
-            ? await query.eq('farm_id', deleteFarmId)
-            : await query;
+          if (farmScopedDeleteTables.includes(item.tableName)) {
+            if (!deletePayload?.farm_id || !deletePayload.id) throw new Error(`DELETE de ${item.tableName} sem identidade imutável`);
+            result = await table.delete().eq('id', deletePayload.id).eq('farm_id', deletePayload.farm_id);
+          } else {
+            result = await table.delete().eq('id', deletePayload?.id || item.payload);
+          }
         }
         break;
+      }
     }
 
     if (result.error) throw result.error;
@@ -478,38 +476,6 @@ export const syncService = {
       synced: true,
       mediaTotalBytes: 0
     });
-  }
-  ,
-
-  // Start a lightweight background runner.
-  // On web this uses setInterval while the page is open.
-  // On native platforms we attempt to use Capacitor background task if available,
-  // otherwise fall back to a periodic timer (best-effort).
-  startBackgroundRunner(intervalMinutes: number = 15) {
-    try {
-      const ms = Math.max(1, intervalMinutes) * 60 * 1000;
-      if (typeof window !== 'undefined') {
-        const key = '_gr_background_sync_timer';
-        if ((window as any)[key]) return;
-        (window as any)[key] = setInterval(() => {
-          if (navigator.onLine) void this.syncAll();
-        }, ms);
-      }
-    } catch (e) {
-      console.error('Erro iniciando background runner:', e);
-    }
-  },
-
-  stopBackgroundRunner() {
-    try {
-      if (typeof window !== 'undefined') {
-        const key = '_gr_background_sync_timer';
-        const t = (window as any)[key];
-        if (t) { clearInterval(t); delete (window as any)[key]; }
-      }
-    } catch (e) {
-      console.error('Erro parando background runner:', e);
-    }
   },
 
   // Validação e recuperação de integridade de dados

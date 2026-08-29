@@ -1,23 +1,27 @@
 import React, { useMemo, useState } from 'react';
 import { Lock, ShieldCheck, UserCheck } from 'lucide-react';
 import { PinRequestModal } from './PinRequestModal';
+import { formatEmployeeSelectionLabel, resolveEmployeeSelection } from '../utils/employee-selection';
 
 interface EmployeeOption {
   id: string;
   name: string;
+  role?: string;
 }
 
 interface EmployeeConfirmFieldProps {
   label?: string;
   value: string;
+  employeeId?: string;
   employees: EmployeeOption[];
-  onChange: (name: string) => void;
+  onChange: (name: string, employeeId: string) => void;
   helpText?: string;
 }
 
 export const EmployeeConfirmField: React.FC<EmployeeConfirmFieldProps> = ({
   label = 'Funcionário',
   value,
+  employeeId,
   employees,
   onChange,
   helpText = 'Confira se o nome está correto antes de salvar.'
@@ -26,10 +30,9 @@ export const EmployeeConfirmField: React.FC<EmployeeConfirmFieldProps> = ({
   const [showPin, setShowPin] = useState(false);
 
   const selected = useMemo(
-    () => employees.find((employee) => employee.name === value),
-    [employees, value]
+    () => resolveEmployeeSelection(employees, employeeId, value),
+    [employeeId, employees, value]
   );
-
   const hasValue = Boolean(value);
   const canShowLocked = hasValue && !editing;
 
@@ -71,13 +74,18 @@ export const EmployeeConfirmField: React.FC<EmployeeConfirmFieldProps> = ({
       ) : (
         <div className="space-y-2">
           <select
-            value={value}
-            onChange={(event) => onChange(event.target.value)}
+            value={selected?.id || ''}
+            onChange={(event) => {
+              const employee = employees.find((item) => String(item.id) === event.target.value);
+              onChange(employee?.name || '', employee?.id || '');
+            }}
             className="w-full p-4 text-base bg-gray-50 border border-gray-200 rounded-xl font-bold text-gray-700 focus:ring-2 focus:ring-blue-500 outline-none"
           >
             <option value="">Selecione...</option>
             {employees.map((employee) => (
-              <option key={employee.id} value={employee.name}>{employee.name}</option>
+              <option key={employee.id} value={employee.id}>
+                {formatEmployeeSelectionLabel(employee, employees)}
+              </option>
             ))}
           </select>
           {hasValue && (

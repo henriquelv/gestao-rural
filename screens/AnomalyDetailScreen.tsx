@@ -7,7 +7,6 @@ import { Anomaly, MediaItem } from '../types';
 import { db } from '../services/db.service';
 import { localdb } from '../services/localdb';
 import { notify } from '../services/notification.service';
-import { ai, Modality } from "../services/ai";
 import { mediaService } from '../services/media.service';
 import { useImageZoom } from '../utils/useImageZoom';
 import { PinRequestModal } from '../components/PinRequestModal';
@@ -116,6 +115,7 @@ export const AnomalyDetailScreen: React.FC = () => {
     if (!anomaly || isPlayingTTS) return;
     setIsPlayingTTS(true);
     try {
+      const { ai, Modality } = await import('../services/ai');
       const textToSay = `Setor ${anomaly.sector}. Responsável: ${anomaly.responsible}. ${anomaly.description}`;
       const response = await ai.models.generateContent({
         model: "gemini-2.5-flash-preview-tts",

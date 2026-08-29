@@ -7,6 +7,14 @@ type ErrorBoundaryState = {
 export class GlobalErrorBoundary extends React.Component<React.PropsWithChildren, ErrorBoundaryState> {
   state: ErrorBoundaryState = { error: null };
 
+  componentDidMount() {
+    window.addEventListener('hashchange', this.resetAfterNavigation);
+  }
+
+  componentWillUnmount() {
+    window.removeEventListener('hashchange', this.resetAfterNavigation);
+  }
+
   static getDerivedStateFromError(error: Error): ErrorBoundaryState {
     return { error };
   }
@@ -28,6 +36,20 @@ export class GlobalErrorBoundary extends React.Component<React.PropsWithChildren
 
   retry = () => {
     this.setState({ error: null });
+  };
+
+  resetAfterNavigation = () => {
+    if (this.state.error) this.setState({ error: null });
+  };
+
+  goBack = () => {
+    this.setState({ error: null }, () => window.history.back());
+  };
+
+  goHome = () => {
+    this.setState({ error: null }, () => {
+      window.location.hash = '#/';
+    });
   };
 
   copyDiagnostic = async () => {
@@ -53,9 +75,15 @@ export class GlobalErrorBoundary extends React.Component<React.PropsWithChildren
         <div className="w-full max-w-md rounded-xl border border-red-200 bg-white p-6 shadow-sm">
           <h1 className="text-xl font-black text-gray-900">Não foi possível carregar esta tela.</h1>
           <p className="mt-3 text-sm font-semibold text-gray-600">O dado não foi apagado.</p>
+          <p className="mt-3 break-words rounded-lg bg-red-50 p-3 text-xs font-semibold text-red-800">
+            {this.state.error.message || 'Erro inesperado de exibição'}
+          </p>
           <div className="mt-6 grid grid-cols-1 gap-3">
-            <button onClick={() => window.history.back()} className="rounded-lg bg-gray-200 px-4 py-3 font-bold text-gray-800">
+            <button onClick={this.goBack} className="rounded-lg bg-gray-200 px-4 py-3 font-bold text-gray-800">
               Voltar
+            </button>
+            <button onClick={this.goHome} className="rounded-lg bg-gray-900 px-4 py-3 font-bold text-white">
+              Ir para o início
             </button>
             <button onClick={this.retry} className="rounded-lg bg-blue-600 px-4 py-3 font-bold text-white">
               Tentar novamente

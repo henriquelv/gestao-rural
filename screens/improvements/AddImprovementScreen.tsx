@@ -14,6 +14,8 @@ import { validateFileSize } from '../../utils/media-compression';
 import { SECTORS_LIST, getSectorColors } from '../../constants/sectors';
 import { mediaService } from '../../services/media.service';
 import { farmContextService } from '../../services/farm-context.service';
+import { createId } from '../../utils/id';
+import { localdb } from '../../services/localdb';
 
 export const AddImprovementScreen: React.FC = () => {
   const navigate = useNavigate();
@@ -24,11 +26,11 @@ export const AddImprovementScreen: React.FC = () => {
   const [employees, setEmployees] = useState<Employee[]>([]);
 
   const [employee, setEmployee] = useState('');
+  const [employeeId, setEmployeeId] = useState('');
   const [sector, setSector] = useState('');
   const [desc, setDesc] = useState('');
   const [media, setMedia] = useState<MediaItem[]>([]);
-  const selectedEmployee = employees.find(emp => emp.name === employee);
-
+  const [isSaving, setIsSaving] = useState(false);
   const handleGalleryPick = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
     if (!f) return;
@@ -46,9 +48,12 @@ export const AddImprovementScreen: React.FC = () => {
       setEmployees(emps);
       const ctx = farmContextService.getContext();
       if (ctx?.employee_name) setEmployee(ctx.employee_name);
+      if (ctx?.employee_id) setEmployeeId(String(ctx.employee_id));
       if (SECTORS_LIST.length > 0) setSector(SECTORS_LIST[0]);
     };
-    load();
+    void load();
+    const unsubscribe = localdb.subscribe('employees', () => { void load(); });
+    return () => unsubscribe();
   }, []);
 
   const appendText = (setter: React.Dispatch<React.SetStateAction<string>>, text: string) => {
@@ -82,19 +87,28 @@ export const AddImprovementScreen: React.FC = () => {
   };
 
   const handleSave = async () => {
+    if (isSaving) return;
     if (!employee || !desc) { notify("Preencha funcionário e descrição.", "error"); return; }
-    await db.addImprovement({
-      id: crypto.randomUUID(),
-      createdAt: timestamp,
-      employee,
-      employee_id: selectedEmployee?.id || farmContextService.getContext()?.employee_id,
-      employee_name: employee || farmContextService.getContext()?.employee_name,
-      sector,
-      description: desc,
-      media
-    });
-    notify("Melhoria salva com sucesso!", "success");
-    navigate('/improvements/list');
+    setIsSaving(true);
+    try {
+      await db.addImprovement({
+        id: createId(),
+        createdAt: timestamp,
+        employee,
+        employee_id: employeeId || farmContextService.getContext()?.employee_id,
+        employee_name: employee || farmContextService.getContext()?.employee_name,
+        sector,
+        description: desc,
+        media
+      });
+      notify("Melhoria salva com sucesso!", "success");
+      navigate('/improvements/list');
+    } catch (error) {
+      console.error('Erro ao salvar melhoria:', error);
+      notify('Não foi possível salvar a melhoria. Seus anexos continuam no aparelho.', 'error');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   return (
@@ -110,8 +124,12 @@ export const AddImprovementScreen: React.FC = () => {
         <EmployeeConfirmField
           label="Funcionário"
           value={employee}
+          employeeId={employeeId}
           employees={employees}
-          onChange={setEmployee}
+          onChange={(name, selectedEmployeeId) => {
+            setEmployee(name);
+            setEmployeeId(selectedEmployeeId);
+          }}
           helpText="Nome usado no registro da melhoria."
         />
 
@@ -184,8 +202,8 @@ export const AddImprovementScreen: React.FC = () => {
           </div>
         </div>
 
-        <button onClick={handleSave} className="w-full bg-green-600 text-white py-4 rounded-xl font-black text-xl shadow-lg mt-4 flex items-center justify-center gap-2">
-          <Save /> SALVAR MELHORIA
+        <button disabled={isSaving} onClick={handleSave} className="w-full bg-green-600 text-white py-4 rounded-xl font-black text-xl shadow-lg mt-4 flex items-center justify-center gap-2 disabled:opacity-60">
+          <Save /> {isSaving ? 'SALVANDO...' : 'SALVAR MELHORIA'}
         </button>
       </div>
     </Layout>

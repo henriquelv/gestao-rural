@@ -83,6 +83,6 @@ npx cap sync         # copia dist/ para android/
 ## Variaveis de ambiente (.env.local)
 
 ```
-VITE_SUPABASE_URL=https://lviwvkvkeyzqdcbevaih.supabase.co
+VITE_SUPABASE_URL=https://vocnftkhnrfnbfvpnqtb.supabase.co
 VITE_SUPABASE_ANON_KEY=<chave>
 ```

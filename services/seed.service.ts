@@ -64,14 +64,6 @@ export async function seedImageData(): Promise<void> {
     // INSTRUÇÕES DE TRABALHO
     // =====================================================================
 
-    // Remove antigas v4 duplicadas para não sujar o banco
-    const oldInst = await db.getInstructions();
-    for (const oi of oldInst) {
-      if (oi.id.startsWith('seed-inst-')) {
-        await db.deleteInstruction(oi.id);
-      }
-    }
-
     const instructions: Instruction[] = [
       // Alimentação (agrupado)
       makeInstruction('seed-v5-alim-1', 'Como carregar dieta', 'Alimentação', '', [

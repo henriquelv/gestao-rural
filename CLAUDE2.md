@@ -7,6 +7,149 @@
 
 ---
 
+## ATUALIZAÇÃO DE 2026-08-29 — AUDITORIA DEFINITIVA 1.0.15
+
+**Branch:** `fix/auditoria-estabilidade-sync-v2`
+**Versão Android:** `1.0.15-definitive-audit-hotfix` (`versionCode 16`)
+**Supabase esperado:** `vocnftkhnrfnbfvpnqtb`
+
+Auditoria completa registrada em `docs/AUDITORIA_DEFINITIVA_2026-08-29.md`.
+
+Principais correções desta rodada:
+
+- removido fallback fixo de funcionários, evitando nomes de outra fazenda/cache incorreto;
+- URLs de mídia agora são sempre reconstruídas pelo `remotePath` no Supabase atual;
+- menu/configuração padrão abre imediatamente sem depender da rede;
+- seed opcional não exclui mais instruções;
+- edição de métricas rejeita valores negativos;
+- Project Ref esperado é validado antes de criar o cliente Supabase;
+- lockfile atualizado para remover dependências transitivas com alertas altos.
+- Home renderiza o menu padrão antes da ponte SQLite e não fica presa em `Preparando o menu` offline;
+- recuperação de órfãos cobre somente dados operacionais e não cria outbox artificial para seeds antigos.
+
+Auditoria remota somente leitura: 888 anomalias, 245 dias de leite, 430 métricas diárias e 48 funcionários ativos. Das 406 mídias referenciadas, 400 existem e 6 paths legados estão ausentes. Nenhuma alteração foi aplicada ao Supabase.
+
+Validação final: lint, 43 testes, build, Capacitor sync, Gradle e smoke local com 650 anomalias aprovados. APK em `builds/definitive-audit-hotfix/gestao-rural-1.0.15-definitive-audit-hotfix-debug.apk`, SHA-256 `FA0D1F184B41ACB5EAC0CB3A83228B2C06B231500A40BE53C6BAD12CC8B95FAB`, com a mesma assinatura das versões anteriores.
+
+---
+
+## ATUALIZAÇÃO DE 2026-08-28 — COMPATIBILIDADE ANDROID 1.0.14
+
+**Branch:** `fix/auditoria-estabilidade-sync-v2`
+**Versão Android:** `1.0.14-android-compat-hotfix` (`versionCode 15`)
+
+### Falha confirmada e correção
+
+- O app declara `minSdkVersion 22` (Android 5.1), mas o bundle usava recursos ausentes em Android System WebView antigo: `globalThis`, `Object.fromEntries`, `Promise.allSettled`, `Array.flatMap`, `String.matchAll`, `structuredClone` e `AbortController`.
+- `Object.fromEntries` era avaliado ao carregar os setores e podia interromper a inicialização inteira. `Promise.allSettled` também aparece no carregador de chunks do Vite e podia quebrar telas abertas sob demanda. Esse cenário é compatível com tela branca somente em alguns aparelhos.
+- O código próprio deixou de depender diretamente desses recursos quando há alternativa simples. `public/compatibility.js`, carregado antes do módulo principal, fornece fallbacks para os usos restantes das dependências.
+- O mínimo prático foi fixado em Android System WebView 63, necessário para a sintaxe `import()` do bundle. Android 5.1 continua aceito desde que Android System WebView ou Google Chrome esteja atualizado.
+- WebViews sem suporte a módulos recebem uma mensagem para atualizar WebView/Chrome em vez de uma tela vazia.
+- Nenhuma tabela, policy, dado remoto, SQLite ou outbox foi alterado por esta correção.
+
+### Risco conhecido
+
+- O lint do módulo `app` não encontrou incompatibilidade `NewApi`/`InlinedApi` e terminou com zero erros. O lint global do Gradle ainda aponta `UnsanitizedFilenameFromContentProvider` dentro de `@capacitor/android` 5.7.8 em `node_modules`; corrigir isso exige avaliar atualização do Capacitor separadamente e não deve ser feito às pressas nesta hotfix.
+- Em aparelhos sem Play Store/serviço de atualização e com WebView anterior à versão 63, o app não executará; a orientação é atualizar Android System WebView/Chrome. Não desinstalar o Gestão Rural para fazer isso.
+
+### Instalação segura
+
+- Instalar por cima do app existente. O `applicationId` permanece `com.gestaorural.app` e a assinatura deve ser conferida no APK final.
+- Não desinstalar, não limpar armazenamento e não limpar o outbox.
+
+### Validação
+
+- `npm run lint`: passou sem avisos; `npm test -- --run`: 41 testes passaram; `npm run build`: passou com o aviso já conhecido do bundle principal de aproximadamente 891 KB.
+- `npx cap sync android` e Gradle `assembleDebug`: concluídos com sucesso.
+- Smoke Android offline: atualização instalada com `adb install -r`; tela inicial, lista de anomalias e nova anomalia abriram sem erro JavaScript ou exceção fatal. Os 24 itens pendentes do emulador permaneceram no outbox.
+- O diálogo `System UI isn't responding` observado no AVD pertence ao System UI do emulador Android 16; após ocultar o diálogo, o Gestão Rural continuou responsivo. Não houve ANR atribuído ao pacote do app.
+- APK: `builds/hotfix-android-compat/gestao-rural-1.0.14-android-compat-hotfix-debug.apk` (18.850.076 bytes).
+- SHA-256 do APK: `2B4AFADEFDBF203AED745C0C522BD3F0B2985B412F9447B197E6583B57BDB7B2`.
+- Assinatura SHA-256 mantida: `9bad6fdd00abd4512029eda8948583c6560cfe7cfe69660353c45f8e5fbabf52`.
+
+---
+
+## ATUALIZAÇÃO DE 2026-08-28 — AUDITORIA DE INTEGRIDADE 1.0.13
+
+**Branch:** `fix/auditoria-estabilidade-sync-v2`
+**Versão Android:** `1.0.13-integrity-hotfix` (`versionCode 14`)
+
+### Falhas confirmadas e corrigidas
+
+- A leitura direta usada quando o cache estava vazio não tinha paginação e poderia parar no limite padrão do Supabase. Toda leitura remota agora usa a carga paginada de 500 em 500.
+- A fazenda possui um nome de funcionário duplicado. Formulários procuravam o primeiro cadastro pelo nome e podiam gravar o `employee_id` errado. Seleção e gravação agora priorizam o ID; nomes repetidos mostram cargo e final do ID.
+- Remover funcionário apagava o cadastro e prejudicava o histórico. A ação agora ativa/desativa por `status`, preservando registros antigos.
+- A licença era aceita quando a fazenda não tinha nenhuma licença e ignorava `starts_at` futuro. Ambos os casos agora bloqueiam a validação.
+- Datas de validade malformadas também passam a bloquear a validação, em vez de liberar acesso silenciosamente.
+- O grace period offline rejeita datas inválidas ou muito no futuro, evitando liberação por relógio/contexto corrompido.
+- Registros locais antigos `synced=false` sem `farm_id` ficavam preservados, mas invisíveis offline. Somente esses registros pendentes recebem a fazenda ativada; caches legados já sincronizados permanecem sem atribuição automática.
+- PDFs e documentos cacheados eram preteridos pela URL remota no download. Offline, as telas agora tentam o arquivo local/cacheado antes da rede.
+
+### Integridade observada em leitura
+
+- Projeto do bundle: `vocnftkhnrfnbfvpnqtb`; ref antigo ausente do JavaScript final.
+- Fazenda ativa, licença ativa, limite de 150 dispositivos e 97 dispositivos ativos.
+- 886 anomalias: fev 2, mar 134, abr 165, mai 165, jun 143, jul 153 e ago 124. O banco atual não contém anomalias de janeiro.
+- Todas as 886 anomalias possuem `createdAt` válido; zero IDs duplicados e zero fingerprints duplicadas.
+- 48 funcionários ativos; uma duplicidade de nome; todos os `employee_id` presentes nas anomalias apontam para funcionários válidos e ativos.
+- 245 registros de leite e 430 métricas diárias, sem datas/chaves duplicadas e sem valores inválidos.
+- A auditoria não encontrou rotina automática que apague anomalias. Exclusões continuam sendo ações explícitas protegidas por PIN.
+
+### Pendências reais
+
+- `updated_at` ainda não existe em cinco tabelas operacionais (`42703`). O fallback evita perda, mas aumenta carga e pode atrasar atualização de edições. A migration aditiva `202608200001_add_operational_updated_at.sql` não foi aplicada.
+- Não há trilha de auditoria/soft delete para exclusões explícitas. Uma migration futura deve registrar quem excluiu e permitir restauração.
+- Não foi possível provar se as anomalias de janeiro existiam no projeto antigo porque não há snapshot/credencial somente leitura do banco antigo no workspace.
+- O bundle principal continua grande (aproximadamente 890 KB minificado); isso é risco de desempenho de abertura, não divergência de dados.
+
+### Validação
+
+- `npm run lint`: passou sem avisos.
+- `npm test -- --run`: 40 testes passaram.
+- `npm run build`: passou; somente aviso não bloqueante de chunk grande.
+- Auditoria Supabase executada somente em leitura. Nenhuma migration, policy ou dado remoto foi alterado.
+
+---
+
+## ATUALIZAÇÃO DE 2026-08-28 — MÉDIAS, EXCEL, PARETO E RETORNO DO APP
+
+**Branch:** `fix/auditoria-estabilidade-sync-v2`
+**Versão Android:** `1.0.12-reports-sync-hotfix` (`versionCode 13`)
+
+### Correções e melhorias
+
+- A tela de leite voltou a mostrar total e média diária do mês selecionado.
+- O botão **Médias de janeiro a dezembro** abre um resumo anual com os 12 meses, inclusive meses sem lançamento, mais total/média do ano e total/média geral.
+- As médias são calculadas diretamente de `milk_daily` por dia efetivamente registrado; não dependem de `farm_monthly_stats`, que está vazia no banco atual.
+- A lista de anomalias exporta todos os resultados filtrados para CSV UTF-8 compatível com Excel, com data, setor, descrição, solução e status, sem responsável.
+- A tela de quantidade ganhou Pareto por setor, percentual individual e percentual acumulado, além de exportação anual.
+- Setores legados em caixa alta/sem acento são normalizados apenas na leitura, sem alterar o banco.
+- Ao retornar do segundo plano no Android, o app inicia sync imediatamente se estiver online. Antes dependia do temporizador, que pode ser suspenso pelo Android.
+- O exportador salva no Android em `Documentos/Gestao Rural` e mantém o download convencional no navegador.
+
+### Auditoria somente leitura do Supabase atual
+
+- Projeto confirmado: `vocnftkhnrfnbfvpnqtb`; fazenda `starmilk` ativa; nenhum acesso ao projeto antigo.
+- `anomalies`: 886; `notices`: 85; `improvements`: 17; `instructions`: 27; `farm_docs`: 15.
+- `milk_daily`: 245 registros, de 08/12/2025 a 27/08/2026; zero datas duplicadas e zero valores inválidos.
+- `daily_metrics`: 430 registros (`lactation` 226, `births` 174, `discard` 30); zero chaves duplicadas e zero valores inválidos.
+- Todas as tabelas sincronizadas aceitam `farm_id`, `employee_id`, `employee_name` e `device_id`.
+- Não foi feita escrita, migration ou alteração de policy no Supabase.
+- A migration aditiva `202608200001_add_operational_updated_at.sql` continua pendente de autorização. O app mantém fallback seguro enquanto ela não for aplicada.
+
+### Validação
+
+- `npm test`: 32 testes passaram, cobrindo médias mensais, janeiro/timezone, Pareto, CSV/Excel, grande volume e integridade do sync.
+- `npm run lint` e `npm run build`: concluídos sem erro.
+- Gradle `assembleDebug`: concluído com sucesso.
+- Smoke Android somente leitura: 11 telas renderizadas; exportação de anomalias presente; Pareto e acumulado presentes; resumo de leite exibiu JAN a DEZ, total/média do ano e total/média geral. Nenhum registro local ou remoto foi criado ou apagado nesse teste.
+- APK: `builds/hotfix-reporting-sync/gestao-rural-1.0.12-reports-sync-hotfix-debug.apk`.
+- `applicationId`: `com.gestaorural.app`; assinatura SHA-256 mantida: `9bad6fdd00abd4512029eda8948583c6560cfe7cfe69660353c45f8e5fbabf52`.
+- SHA-256 do APK: `5BBECDE129D56A5B51038E03C01CE5D644A709CE4F4DCBDE42B398336F838D76`.
+- Auditoria reproduzível: `node scripts/read-only-data-audit.mjs` (somente leitura; não imprime chaves).
+
+---
+
 ## CONTEXTO DO PROJETO
 
 **App:** Gestão Rural — app mobile Android para fazendas leiteiras.
@@ -15,6 +158,57 @@
 **Banco local web:** `FarmDB_Web_v3` (Dexie/IndexedDB).
 **Banco local nativo:** `FarmDB_Native_v1` (SQLite).
 **Chave de contexto:** `gestao_rural_farm_context_v2` no localStorage — armazena `farm_id`, `employee_id`, `device_id`, etc.
+
+---
+
+## ATUALIZAÇÃO DE 2026-08-28 — HOTFIX DE ESTABILIDADE E SINCRONIZAÇÃO
+
+**Branch:** `fix/auditoria-estabilidade-sync-v2`
+**Versão Android:** `1.0.11-data-sync-hotfix` (`versionCode 12`)
+**Backend embutido no APK:** `vocnftkhnrfnbfvpnqtb`; o ref antigo `lviwvkvkeyzqdcbevaih` não está no bundle.
+
+### Causas confirmadas
+
+- `milk_daily`, `daily_metrics` e `farm_monthly_stats` não possuem coluna `id`, mas a leitura antiga ordenava todas as tabelas por `id`. O Supabase retornava `42703` e cada aparelho permanecia com um cache diferente.
+- As tabelas operacionais ainda não possuem `updated_at` no banco remoto. O fallback para `createdAt` existia, mas o cursor podia avançar para o horário atual e esconder registros adicionados posteriormente com data antiga.
+- A reconciliação completa ficava presa a uma flag permanente. Agora cada processo do app tenta uma carga completa segura uma vez por abertura e repete se alguma tabela crítica falhar.
+- O SQLite nativo publicava a conexão antes de `open()` e do schema terminarem. Chamadas concorrentes podiam falhar com `database FarmDB_Native_v1 not opened`, principalmente em aparelhos mais lentos.
+- A carga completa fazia uma consulta SQLite por registro recebido. Com 883 anomalias isso gerava mais de mil travessias pela ponte Android e podia aparentar travamento.
+- Uma exclusão ainda pendente no outbox podia reaparecer localmente durante uma carga remota. IDs locais não sincronizados e deletes pendentes/errados agora são protegidos.
+
+### Correções desta etapa
+
+- Paginação de 500 em 500 até o fim, com ordenação por `id`, `date`, `date + type` ou `monthKey` conforme o schema real.
+- Cursores vazios não avançam; o fallback legado usa o maior `createdAt`/`updatedAt` realmente recebido.
+- Leite e métricas fazem reconciliação completa, pois `date` é chave de negócio e não timestamp de alteração.
+- Abertura do SQLite tornou-se atômica; todas as chamadas concorrentes aguardam a mesma `initPromise`.
+- `bulkPut()` nativo usa `executeSet` em lotes de 100, reduzindo drasticamente chamadas JNI/WebView.
+- Conflitos locais são verificados em lote, sem sobrescrever `synced=false` e sem ressuscitar deletes do outbox.
+- Telas de anomalias e produção leem o cache primeiro, recebem notificações do `bulkPut` e mantêm dados locais visíveis quando a rede falha.
+- Erros de atualização deixam aviso visível; sucesso não é mais informado quando uma tabela crítica falhou.
+
+### Integridade verificada em leitura
+
+- Fazenda `starmilk`: ativa; licença ativa; 48 funcionários ativos; 97 dispositivos ativos.
+- `anomalies`: 883; `milk_daily`: 245; `daily_metrics`: 430; todos os registros dessas consultas pertencem à fazenda ativa.
+- Anomalias em 2026: jan 0, fev 2, mar 134, abr 165, mai 165, jun 143, jul 153, ago 121.
+- Nenhuma migration e nenhuma escrita foram aplicadas ao banco remoto nesta auditoria.
+- A migration aditiva `202608200001_add_operational_updated_at.sql` continua pendente de validação/autorização.
+
+### Validação executada
+
+- `npm run test`: 27 testes passaram, incluindo 883 anomalias e todos os 12 meses.
+- `npm run lint`: passou sem warnings.
+- `npm run build`: passou; apenas aviso não bloqueante de chunk grande.
+- Gradle `assembleDebug`: passou.
+- Smoke Android: SQLite abriu; lote nativo de 120 registros inseriu 120 e removeu apenas os 120 registros de teste; 10 telas críticas renderizaram sem exceção.
+- APK: `builds/hotfix-data-sync/gestao-rural-1.0.11-data-sync-hotfix-debug.apk`.
+- `applicationId`: `com.gestaorural.app`; assinatura SHA-256 mantida: `9bad6fdd00abd4512029eda8948583c6560cfe7cfe69660353c45f8e5fbabf52`.
+
+### Instalação segura
+
+- Instalar por cima da versão existente. Não desinstalar, não limpar armazenamento e não limpar o outbox.
+- O APK usa o mesmo `applicationId` e a mesma assinatura das hotfixes anteriores, preservando SQLite, contexto e mídias locais.
 
 ---
 

@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
-    "test:anomalies": "npm exec --yes tsx -- --test utils/anomaly-months.test.ts",
+    "test": "vitest run",
+    "test:anomalies": "vitest run utils/anomaly-months.test.ts",
     "preview": "vite preview",
     "cap:init": "cap init",
     "cap:add:android": "cap add android",
@@ -47,6 +48,7 @@
     "postcss": "^8.4.35",
     "tailwindcss": "^3.4.1",
     "typescript": "^5.2.2",
-    "vite": "^5.1.4"
+    "vite": "^5.1.4",
+    "vitest": "^1.6.1"
   }
 }

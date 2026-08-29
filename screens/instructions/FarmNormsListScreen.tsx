@@ -104,7 +104,7 @@ export const FarmNormsListScreen: React.FC = () => {
         remoteUrl = media.uri || '';
       }
 
-      if (isRemoteHttpUrl(remoteUrl)) {
+      if (navigator.onLine && isRemoteHttpUrl(remoteUrl)) {
         console.log('Download usando URL remota:', remoteUrl);
         await downloadService.downloadFile(remoteUrl, media.name || 'documento', media.mimeType || '', media.localPath);
         return;
@@ -159,8 +159,10 @@ export const FarmNormsListScreen: React.FC = () => {
             return (
               <div
                 key={doc.id}
-                onClick={() => openMedia(doc.media, photoUrl)}
-                className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden mb-4 cursor-pointer hover:shadow-md active:opacity-90 transition-all"
+                onClick={() => {
+                  if (doc.media) void openMedia(doc.media, photoUrl);
+                }}
+                className={`bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden mb-4 transition-all ${doc.media ? 'cursor-pointer hover:shadow-md active:opacity-90' : ''}`}
               >
                 <div className="p-4">
                   <div className="flex items-start gap-4">

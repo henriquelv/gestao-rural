@@ -1,15 +1,20 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Layout } from '../../components/Layout';
 import { Header } from '../../components/Header';
 import { FieldLabel } from '../../components/FieldLabel';
-import { Save, TrendingUp, Calculator, Calendar, Clock, BarChart2, Lock, Edit2, Trash2, X, Download } from 'lucide-react';
+import { Save, TrendingUp, Calculator, Calendar, Clock, BarChart2, Lock, Edit2, Trash2, X, Download, AlertTriangle, RefreshCw, ChevronLeft, ChevronRight } from 'lucide-react';
 import { db } from '../../services/db.service';
 import { notify } from '../../services/notification.service';
 import { DailyMilk, DailyMetric } from '../../types';
 import { PinRequestModal } from '../../components/PinRequestModal';
 import { authService } from '../../services/auth.service';
 import { farmContextService } from '../../services/farm-context.service';
+import { localdb } from '../../services/localdb';
+import { normalizeDailyMetric, normalizeDailyMilk } from '../../utils/record-normalize';
+import { getBusinessDateKey } from '../../utils/anomaly-months';
+import { buildMilkSummary } from '../../utils/milk-stats';
+import { exportCsv } from '../../services/export.service';
 
 interface DataMetricScreenProps {
   type: 'milk' | 'lactation' | 'discard' | 'births';
@@ -27,6 +32,7 @@ export const DataMetricScreen: React.FC<DataMetricScreenProps> = ({ type }) => {
   });
   
   const [isLoading, setIsLoading] = useState(false);
+  const [refreshError, setRefreshError] = useState('');
   const [showPinModal, setShowPinModal] = useState(false);
   const [pendingProtectedAction, setPendingProtectedAction] = useState<(() => Promise<void>) | null>(null);
   const [editingEntry, setEditingEntry] = useState<any | null>(null);
@@ -36,10 +42,18 @@ export const DataMetricScreen: React.FC<DataMetricScreenProps> = ({ type }) => {
   const [showMonthPicker, setShowMonthPicker] = useState(false);
   
   const MONTH_KEY = `selectedMonth_${farmContextService.getFarmId() || 'default'}`;
+  const readSavedMonth = () => {
+    try {
+      const value = localStorage.getItem(MONTH_KEY) || '';
+      return /^\d{4}-\d{2}$/.test(value) ? value : '';
+    } catch {
+      return '';
+    }
+  };
 
   // Inicializar monthPickerYear baseado no selectedMonth
   const [monthPickerYear, setMonthPickerYear] = useState(() => {
-    const saved = localStorage.getItem(MONTH_KEY);
+    const saved = readSavedMonth();
     if (saved) {
       const [y] = saved.split('-');
       return parseInt(y);
@@ -60,22 +74,22 @@ export const DataMetricScreen: React.FC<DataMetricScreenProps> = ({ type }) => {
   
   // Filter by month (YYYY-MM). Default to current month. Persists per farm.
   const [selectedMonth, setSelectedMonth] = useState(() => {
-    const saved = localStorage.getItem(MONTH_KEY);
+    const saved = readSavedMonth();
     if (saved) return saved;
     const now = new Date();
     const y = now.getFullYear();
     const m = String(now.getMonth() + 1).padStart(2, '0');
     return `${y}-${m}`;
   });
+  const [showMilkSummary, setShowMilkSummary] = useState(false);
+  const [summaryYear, setSummaryYear] = useState(() => Number(readSavedMonth().slice(0, 4)) || new Date().getFullYear());
 
   // Persist selectedMonth to localStorage whenever it changes (keyed by farm)
   useEffect(() => {
-    localStorage.setItem(MONTH_KEY, selectedMonth);
+    try { localStorage.setItem(MONTH_KEY, selectedMonth); } catch { /* armazenamento opcional */ }
     const [y] = selectedMonth.split('-');
     setMonthPickerYear(parseInt(y));
   }, [MONTH_KEY, selectedMonth]);
-
-  useEffect(() => { load(); }, [type]);
 
   // Check if entry date has existing value and auto-fill
   useEffect(() => {
@@ -92,23 +106,44 @@ export const DataMetricScreen: React.FC<DataMetricScreenProps> = ({ type }) => {
     return new Date(`${d}T00:00:00`);
   };
 
+  const loadLocal = async () => {
+    const tableName = type === 'milk' ? 'milk_daily' : 'daily_metrics';
+    const farmId = farmContextService.getFarmId();
+    const rows = await localdb.getAll<any>(tableName, 'date');
+    const scoped = rows.filter((row) => row?.farm_id === farmId);
+    const data = type === 'milk'
+      ? scoped.map(normalizeDailyMilk).filter((row): row is DailyMilk => row !== null)
+      : scoped.map(normalizeDailyMetric).filter((row): row is DailyMetric => row !== null && row.type === type);
+    setHistory(data);
+  };
+
   const load = async (silent = false) => {
     try {
       if (!silent) setIsLoading(true);
-      // Busca dados frescos do servidor (ignorado automaticamente se offline)
-      if (type === 'milk') await db.refreshMilkDaily();
-      else await db.refreshDailyMetrics();
-      let data;
-      if (type === 'milk') data = await db.getMilkHistory();
-      else data = await db.getDailyMetrics(type);
-      setHistory(Array.isArray(data) ? data : []);
+      // Offline-first: renderiza o SQLite imediatamente antes de aguardar rede.
+      await loadLocal();
+      const refreshed = type === 'milk'
+        ? await db.refreshMilkDaily()
+        : await db.refreshDailyMetrics();
+      await loadLocal();
+      setRefreshError(navigator.onLine && !refreshed
+        ? 'Não foi possível atualizar os dados do servidor. A cópia salva neste aparelho continua visível.'
+        : '');
     } catch (e) {
       console.error('Erro ao carregar dados:', e);
-      setHistory([]);
+      // Mantém a última leitura válida na tela; nenhum dado local é apagado.
+      setRefreshError('Não foi possível atualizar os dados do servidor. A cópia salva neste aparelho continua visível.');
     } finally {
       if (!silent) setIsLoading(false);
     }
   };
+
+  useEffect(() => {
+    void load();
+    const tableName = type === 'milk' ? 'milk_daily' : 'daily_metrics';
+    const unsubscribe = localdb.subscribe(tableName, () => loadLocal());
+    return () => unsubscribe && unsubscribe();
+  }, [type]);
 
   const protectedAction = async (action: () => Promise<void>) => {
     if (authService.isAuthenticated()) {
@@ -197,13 +232,25 @@ export const DataMetricScreen: React.FC<DataMetricScreenProps> = ({ type }) => {
   };
 
   const { displayData, totalMonth } = processChartData();
+  const milkSummary = useMemo(
+    () => buildMilkSummary(type === 'milk' ? history as DailyMilk[] : [], summaryYear),
+    [history, summaryYear, type]
+  );
+  const selectedMilkMonth = useMemo(() => {
+    const monthIndex = Number(selectedMonth.slice(5, 7)) - 1;
+    return buildMilkSummary(type === 'milk' ? history as DailyMilk[] : [], Number(selectedMonth.slice(0, 4))).months[monthIndex];
+  }, [history, selectedMonth, type]);
 
   const formatNumber = (n: number) => {
     if (!Number.isFinite(n)) return '0';
-    if (type === 'milk') {
-      return Number.isInteger(n) ? String(n) : n.toFixed(1);
+    try {
+      return n.toLocaleString('pt-BR', {
+        minimumFractionDigits: 0,
+        maximumFractionDigits: type === 'milk' ? 1 : 0
+      });
+    } catch {
+      return type === 'milk' && !Number.isInteger(n) ? n.toFixed(1) : String(Math.round(n));
     }
-    return String(Math.round(n));
   };
 
   const getDailyListData = () => {
@@ -213,7 +260,7 @@ export const DataMetricScreen: React.FC<DataMetricScreenProps> = ({ type }) => {
     let accumulatedByDate: Record<string, number> = {};
     if (vizMode === 'accumulated') {
       const sortedAsc = [...history].sort((a,b) => parseLocalDay((a as any).date).getTime() - parseLocalDay((b as any).date).getTime());
-      const monthData = sortedAsc.filter(d => (d as any).date.startsWith(selectedMonth));
+      const monthData = sortedAsc.filter(d => String((d as any).date || '').startsWith(selectedMonth));
       let runningTotal = 0;
       for (const d of monthData) {
         const v = type === 'milk' ? (Number((d as DailyMilk).liters) || 0) : (Number((d as DailyMetric).value) || 0);
@@ -239,7 +286,7 @@ export const DataMetricScreen: React.FC<DataMetricScreenProps> = ({ type }) => {
 
   const dailyList = getDailyListData();
 
-  const exportCSV = () => {
+  const exportCSV = async () => {
     try {
       const sorted = [...history].sort((a: any, b: any) => a.date > b.date ? 1 : -1);
       const rows = [
@@ -249,15 +296,13 @@ export const DataMetricScreen: React.FC<DataMetricScreenProps> = ({ type }) => {
           return [d.date, String(val ?? ''), conf.unit];
         })
       ];
-      const csv = rows.map(r => r.join(';')).join('\n');
-      const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${conf.title.toLowerCase().replace(/\s+/g, '_')}_${selectedMonth}.csv`;
-      a.click();
-      URL.revokeObjectURL(url);
-      notify('CSV exportado com sucesso!', 'success');
+      const result = await exportCsv(rows, `${conf.title}_${selectedMonth}`);
+      notify(
+        result.native
+          ? `Arquivo salvo em Documentos/Gestao Rural/${result.fileName}`
+          : 'Arquivo compatível com Excel exportado com sucesso!',
+        'success'
+      );
     } catch (e) {
       console.error('Erro ao exportar CSV:', e);
       notify('Erro ao exportar CSV.', 'error');
@@ -294,6 +339,10 @@ export const DataMetricScreen: React.FC<DataMetricScreenProps> = ({ type }) => {
     const num = parseFloat(editValue);
     if (!Number.isFinite(num)) {
       notify('Informe um valor válido.', 'error');
+      return;
+    }
+    if (num < 0) {
+      notify('O valor não pode ser negativo.', 'error');
       return;
     }
 
@@ -407,14 +456,50 @@ export const DataMetricScreen: React.FC<DataMetricScreenProps> = ({ type }) => {
       <Header title={conf.title} targetRoute="/data" />
       
       <div className="flex-1 bg-gray-50 overflow-y-auto pb-40">
+        {refreshError && (
+          <div className="m-3 mb-0 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+            <div className="flex items-start gap-2">
+              <AlertTriangle size={18} className="mt-0.5 shrink-0" />
+              <span className="font-semibold">{refreshError}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => void load()}
+              disabled={isLoading}
+              className="mt-3 inline-flex min-h-10 items-center gap-2 rounded-lg bg-amber-900 px-3 font-bold text-white disabled:opacity-60"
+            >
+              <RefreshCw size={16} className={isLoading ? 'animate-spin' : ''} /> Atualizar novamente
+            </button>
+          </div>
+        )}
         {/* Input de Dados + Data (Scrollável, não fixo) */}
         <div className="bg-white border-b-2 border-gray-200 p-4">
-           <div className="p-6 rounded-xl shadow-md border mb-4 text-white flex items-center justify-between relative overflow-hidden" style={{backgroundColor: conf.color, borderColor: conf.color}}>
-              <div className="relative z-10">
-                  <p className="text-white/80 font-bold uppercase text-xs mb-1">Total Acumulado (Mês)</p>
-                  <h2 className="text-4xl font-black tracking-tight">{formatNumber(totalMonth)} <span className="text-xl font-medium opacity-80">{conf.unit}</span></h2>
+           <div className="mb-4 overflow-hidden rounded-lg border text-white shadow-md" style={{backgroundColor: conf.color, borderColor: conf.color}}>
+              <div className="grid grid-cols-2 divide-x divide-white/25 p-4">
+                <div className="min-w-0 pr-3">
+                  <p className="mb-1 text-[11px] font-bold uppercase text-white/80">Total do mês</p>
+                  <p className="break-words text-2xl font-black sm:text-3xl">{formatNumber(totalMonth)} <span className="text-base font-medium opacity-80">{conf.unit}</span></p>
+                </div>
+                <div className="min-w-0 pl-3">
+                  <p className="mb-1 text-[11px] font-bold uppercase text-white/80">{type === 'milk' ? 'Média diária' : 'Registros no mês'}</p>
+                  <p className="break-words text-2xl font-black sm:text-3xl">
+                    {type === 'milk' ? formatNumber(selectedMilkMonth?.average || 0) : dailyList.length}
+                    <span className="text-base font-medium opacity-80"> {type === 'milk' ? conf.unit : 'dias'}</span>
+                  </p>
+                </div>
               </div>
-              <div className="bg-white/20 p-3 rounded-full relative z-10"><Calculator size={32} className="text-white" /></div>
+              {type === 'milk' && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSummaryYear(Number(selectedMonth.slice(0, 4)) || new Date().getFullYear());
+                    setShowMilkSummary(true);
+                  }}
+                  className="flex min-h-11 w-full items-center justify-center gap-2 border-t border-white/25 bg-black/10 px-4 text-sm font-bold active:bg-black/20"
+                >
+                  <BarChart2 size={18} /> Médias de janeiro a dezembro
+                </button>
+              )}
            </div>
 
            <div className="bg-white p-5 rounded-xl shadow-md border border-gray-200 relative z-10">
@@ -446,7 +531,7 @@ export const DataMetricScreen: React.FC<DataMetricScreenProps> = ({ type }) => {
                     }
                     setEntryDate(e.target.value);
                   }}
-                  max={new Date().toISOString().split('T')[0]}
+                  max={getBusinessDateKey(new Date())}
                   className="px-3 py-2 rounded-lg font-bold text-gray-800 bg-gray-100 border border-gray-300 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
                 />
               </div>
@@ -531,12 +616,12 @@ export const DataMetricScreen: React.FC<DataMetricScreenProps> = ({ type }) => {
                 </div>
                 {history.length > 0 && (
                   <button
-                    onClick={exportCSV}
-                    title="Exportar todos os dados como CSV"
+                    onClick={() => void exportCSV()}
+                    title="Exportar todos os dados para Excel"
                     className="flex items-center gap-1 px-3 py-1 bg-green-50 border border-green-300 text-green-700 text-xs font-bold rounded-lg hover:bg-green-100 transition active:scale-95"
                   >
                     <Download size={13} />
-                    CSV
+                    Excel
                   </button>
                 )}
             </h4>
@@ -666,6 +751,65 @@ export const DataMetricScreen: React.FC<DataMetricScreenProps> = ({ type }) => {
               >
                 Cancelar
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {type === 'milk' && showMilkSummary && (
+        <div className="fixed inset-0 z-[75] flex items-end justify-center bg-black/60 p-0 sm:items-center sm:p-4">
+          <div className="flex max-h-[92vh] w-full max-w-lg flex-col overflow-hidden rounded-t-lg bg-white shadow-2xl sm:rounded-lg">
+            <div className="flex items-center justify-between border-b border-gray-200 bg-gray-50 px-4 py-3">
+              <div>
+                <p className="text-xs font-bold uppercase text-gray-500">Produção de leite</p>
+                <h3 className="text-lg font-black text-gray-900">Médias mensais</h3>
+              </div>
+              <button type="button" onClick={() => setShowMilkSummary(false)} className="flex h-10 w-10 items-center justify-center rounded-lg text-gray-600 active:bg-gray-200" aria-label="Fechar médias">
+                <X size={22} />
+              </button>
+            </div>
+
+            <div className="flex items-center gap-2 border-b border-gray-200 px-4 py-3">
+              <button type="button" onClick={() => setSummaryYear((year) => year - 1)} className="flex h-10 w-10 items-center justify-center rounded-lg border border-gray-300 bg-white" aria-label="Ano anterior">
+                <ChevronLeft size={20} />
+              </button>
+              <div className="flex-1 text-center text-xl font-black text-gray-900">{summaryYear}</div>
+              <button type="button" onClick={() => setSummaryYear((year) => year + 1)} className="flex h-10 w-10 items-center justify-center rounded-lg border border-gray-300 bg-white" aria-label="Próximo ano">
+                <ChevronRight size={20} />
+              </button>
+            </div>
+
+            <div className="min-h-0 flex-1 overflow-y-auto">
+              <div className="grid grid-cols-[52px_1fr_1fr_44px] gap-2 border-b border-gray-200 bg-gray-100 px-4 py-2 text-[10px] font-black uppercase text-gray-600">
+                <span>Mês</span><span className="text-right">Média</span><span className="text-right">Total</span><span className="text-right">Dias</span>
+              </div>
+              {milkSummary.months.map((month) => (
+                <div key={month.month} className="grid min-h-11 grid-cols-[52px_1fr_1fr_44px] items-center gap-2 border-b border-gray-100 px-4 py-2 text-sm">
+                  <span className="font-black text-gray-800">{month.label}</span>
+                  <span className="text-right font-bold text-blue-700">{formatNumber(month.average)} L</span>
+                  <span className="text-right font-semibold text-gray-800">{formatNumber(month.total)} L</span>
+                  <span className="text-right text-gray-500">{month.days}</span>
+                </div>
+              ))}
+            </div>
+
+            <div className="grid grid-cols-2 border-t-2 border-gray-300 bg-gray-50">
+              <div className="border-b border-r border-gray-200 p-3">
+                <p className="text-[10px] font-bold uppercase text-gray-500">Total do ano</p>
+                <p className="text-lg font-black text-gray-900">{formatNumber(milkSummary.yearStats.total)} L</p>
+              </div>
+              <div className="border-b border-gray-200 p-3">
+                <p className="text-[10px] font-bold uppercase text-gray-500">Média do ano</p>
+                <p className="text-lg font-black text-blue-700">{formatNumber(milkSummary.yearStats.average)} L/dia</p>
+              </div>
+              <div className="border-r border-gray-200 p-3">
+                <p className="text-[10px] font-bold uppercase text-gray-500">Total geral</p>
+                <p className="text-lg font-black text-gray-900">{formatNumber(milkSummary.allTimeStats.total)} L</p>
+              </div>
+              <div className="p-3">
+                <p className="text-[10px] font-bold uppercase text-gray-500">Média geral</p>
+                <p className="text-lg font-black text-blue-700">{formatNumber(milkSummary.allTimeStats.average)} L/dia</p>
+              </div>
             </div>
           </div>
         </div>

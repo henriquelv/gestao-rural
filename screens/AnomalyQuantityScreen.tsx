@@ -6,16 +6,19 @@ import { localdb } from '../services/localdb';
 import { notify } from '../services/notification.service';
 import { Anomaly } from '../types';
 import { SectorType, DEFAULT_SECTOR_BASE_COLOR, SECTORS_LIST } from '../constants/sectors';
-import { Filter, TrendingUp, X, Calendar, ChevronDown, ChevronUp, ChevronLeft, ChevronRight } from 'lucide-react';
-import { getAnomalyDateParts, groupAnomaliesByMonth, isAnomalyInDateRange } from '../utils/anomaly-months';
+import { Filter, TrendingUp, X, Calendar, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, FileSpreadsheet } from 'lucide-react';
+import { getAnomalyDateParts, getBusinessDateKey, groupAnomaliesByMonth, isAnomalyInDateRange } from '../utils/anomaly-months';
+import { buildAnomalyPareto } from '../utils/anomaly-pareto';
+import { exportCsv } from '../services/export.service';
 
 interface MonthData {
   month: string;
   label: string;
   bySetor: Record<SectorType, number>;
+  unknownCount: number;
 }
 
-type ViewMode = 'chart' | 'table' | 'period';
+type ViewMode = 'chart' | 'table' | 'period' | 'pareto';
 
 export const AnomalyQuantityScreen: React.FC = () => {
   const [anomalies, setAnomalies] = useState<Anomaly[]>([]);
@@ -28,6 +31,7 @@ export const AnomalyQuantityScreen: React.FC = () => {
   const [selectedYear, setSelectedYear] = useState(() => new Date().getFullYear());
   const [selectedSector, setSelectedSector] = useState<SectorType | 'all'>('all');
   const [viewMode, setViewMode] = useState<ViewMode>('chart');
+  const [isExporting, setIsExporting] = useState(false);
   const [startDate, setStartDate] = useState(() => `${new Date().getFullYear()}-01-01`);
   const [endDate, setEndDate] = useState(() => {
     const now = new Date();
@@ -87,7 +91,7 @@ export const AnomalyQuantityScreen: React.FC = () => {
     if (selectedSector === 'all') {
       return {
         ...m,
-        total: Object.values(m.bySetor).reduce((a, b) => a + b, 0)
+        total: Object.values(m.bySetor).reduce((a, b) => a + b, 0) + m.unknownCount
       };
     } else {
       return {
@@ -107,6 +111,37 @@ export const AnomalyQuantityScreen: React.FC = () => {
   });
 
   const totalAnomalies = annualAnomalies.length;
+  const paretoData = buildAnomalyPareto(annualAnomalies);
+  const paretoMax = Math.max(...paretoData.map((row) => row.count), 1);
+
+  const exportAnnualAnomalies = async () => {
+    if (isExporting || annualAnomalies.length === 0) return;
+    setIsExporting(true);
+    try {
+      const rows = [
+        ['Data', 'Setor', 'O que aconteceu', 'Solução imediata', 'Status'],
+        ...annualAnomalies.map((item) => [
+          getBusinessDateKey(item.createdAt).split('-').reverse().join('/') || String(item.createdAt || ''),
+          item.sector || 'Sem setor',
+          item.description || '',
+          item.immediateSolution || '',
+          item.resolvedAt ? 'Resolvida' : 'Pendente'
+        ])
+      ];
+      const result = await exportCsv(rows, `anomalias_pareto_${selectedYear}`);
+      notify(
+        result.native
+          ? `Arquivo salvo em Documentos/Gestao Rural/${result.fileName}`
+          : 'Dados do Pareto exportados para Excel.',
+        'success'
+      );
+    } catch (error) {
+      console.error('[ParetoExport] Falha ao gerar arquivo:', error);
+      notify('Não foi possível exportar os dados.', 'error');
+    } finally {
+      setIsExporting(false);
+    }
+  };
 
   const clearFilters = () => {
     setSelectedSector('all');
@@ -198,15 +233,19 @@ export const AnomalyQuantityScreen: React.FC = () => {
               {/* Modo de Visualização */}
               <div>
                 <label className="text-xs font-bold text-gray-600 mb-2 block">Visualização</label>
-                <div className="flex gap-2">
+                <div className="grid grid-cols-2 gap-2">
                   {[
                     { key: 'chart', label: 'Gráfico' },
                     { key: 'table', label: 'Tabela' },
-                    { key: 'period', label: 'Período' }
+                    { key: 'period', label: 'Período' },
+                    { key: 'pareto', label: 'Pareto' }
                   ].map(mode => (
                     <button
                       key={mode.key}
-                      onClick={() => setViewMode(mode.key as ViewMode)}
+                      onClick={() => {
+                        setViewMode(mode.key as ViewMode);
+                        if (mode.key === 'pareto') setSelectedSector('all');
+                      }}
                       className={`flex-1 p-2 rounded-lg font-bold text-sm transition ${
                         viewMode === mode.key
                           ? 'bg-blue-600 text-white'
@@ -323,6 +362,15 @@ export const AnomalyQuantityScreen: React.FC = () => {
                               </div>
                             );
                           })}
+                          {data.unknownCount > 0 && (
+                            <div
+                              className="flex items-center justify-center text-white font-bold text-[8px]"
+                              style={{ height: `${(data.unknownCount / data.total) * 100}%`, backgroundColor: '#6B7280' }}
+                              title={`Outros/legado: ${data.unknownCount}`}
+                            >
+                              {data.unknownCount}
+                            </div>
+                          )}
                         </div>
 
                         <span className="text-[9px] text-gray-600 mt-2 font-semibold uppercase">{data.label}</span>
@@ -348,9 +396,12 @@ export const AnomalyQuantityScreen: React.FC = () => {
                   <tr>
                     <th className="p-3 text-left font-bold text-gray-800">Mês</th>
                     {selectedSector === 'all' ? (
-                      SECTORS_LIST.map(s => (
-                        <th key={s} className="p-3 text-center font-bold text-gray-800">{s}</th>
-                      ))
+                      <>
+                        {SECTORS_LIST.map(s => (
+                          <th key={s} className="p-3 text-center font-bold text-gray-800">{s}</th>
+                        ))}
+                        <th className="p-3 text-center font-bold text-gray-800">Outros/legado</th>
+                      </>
                     ) : (
                       <th className="p-3 text-center font-bold text-gray-800">{selectedSector}</th>
                     )}
@@ -360,20 +411,23 @@ export const AnomalyQuantityScreen: React.FC = () => {
                 <tbody>
                   {monthlyData.map((month, i) => {
                     const monthTotal = selectedSector === 'all' 
-                      ? Object.values(month.bySetor).reduce((a, b) => a + b, 0)
+                      ? Object.values(month.bySetor).reduce((a, b) => a + b, 0) + month.unknownCount
                       : (month.bySetor[selectedSector as SectorType] || 0);
                     
                     return (
                       <tr key={i} className="border-b border-gray-200 hover:bg-gray-50 transition">
                         <td className="p-3 font-bold text-gray-700">{month.label}</td>
                         {selectedSector === 'all' ? (
-                          SECTORS_LIST.map(s => (
-                            <td key={s} className="p-3 text-center">
-                              <span className="inline-block px-2 py-1 rounded font-bold" style={{ backgroundColor: DEFAULT_SECTOR_BASE_COLOR[s] + '30', color: DEFAULT_SECTOR_BASE_COLOR[s] }}>
-                                {month.bySetor[s] || 0}
-                              </span>
-                            </td>
-                          ))
+                          <>
+                            {SECTORS_LIST.map(s => (
+                              <td key={s} className="p-3 text-center">
+                                <span className="inline-block px-2 py-1 rounded font-bold" style={{ backgroundColor: DEFAULT_SECTOR_BASE_COLOR[s] + '30', color: DEFAULT_SECTOR_BASE_COLOR[s] }}>
+                                  {month.bySetor[s] || 0}
+                                </span>
+                              </td>
+                            ))}
+                            <td className="p-3 text-center font-bold text-gray-600">{month.unknownCount}</td>
+                          </>
                         ) : (
                           <td className="p-3 text-center font-bold" style={{ color: DEFAULT_SECTOR_BASE_COLOR[selectedSector as SectorType] }}>
                             {monthTotal}
@@ -414,6 +468,49 @@ export const AnomalyQuantityScreen: React.FC = () => {
                 );
               })}
             </div>
+          </div>
+        )}
+
+        {viewMode === 'pareto' && (
+          <div className="overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm">
+            <div className="flex items-center justify-between gap-3 border-b border-gray-200 px-4 py-3">
+              <div className="min-w-0">
+                <h3 className="text-sm font-black uppercase text-gray-800">Pareto por setor - {selectedYear}</h3>
+                <p className="text-xs text-gray-500">Ordenado do maior impacto para o menor</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => void exportAnnualAnomalies()}
+                disabled={isExporting || annualAnomalies.length === 0}
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-700 disabled:opacity-50"
+                title="Exportar dados do ano para Excel"
+                aria-label="Exportar dados do Pareto para Excel"
+              >
+                <FileSpreadsheet size={19} />
+              </button>
+            </div>
+
+            {paretoData.length === 0 ? (
+              <p className="p-8 text-center text-sm text-gray-500">Sem anomalias em {selectedYear}.</p>
+            ) : (
+              <div className="divide-y divide-gray-100">
+                {paretoData.map((row) => (
+                  <div key={row.label} className="px-4 py-3">
+                    <div className="mb-1 flex items-baseline justify-between gap-3">
+                      <span className="min-w-0 truncate text-sm font-bold text-gray-800">{row.label}</span>
+                      <span className="shrink-0 text-sm font-black text-gray-900">{row.count}</span>
+                    </div>
+                    <div className="h-3 overflow-hidden rounded bg-gray-100">
+                      <div className="h-full bg-blue-600" style={{ width: `${(row.count / paretoMax) * 100}%` }} />
+                    </div>
+                    <div className="mt-1 flex justify-between text-[11px] font-semibold text-gray-500">
+                      <span>{row.percentage.toFixed(1).replace('.', ',')}% do total</span>
+                      <span>Acumulado {row.cumulativePercentage.toFixed(1).replace('.', ',')}%</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
 

@@ -10,12 +10,12 @@ import { EmployeeConfirmField } from '../components/EmployeeConfirmField';
 import { Anomaly, MediaItem, Employee } from '../types';
 import { db } from '../services/db.service';
 import { notify } from '../services/notification.service';
-import { GoogleGenAI } from "@google/genai";
 import { validateFileSize } from '../utils/media-compression';
 import { SECTORS_LIST, getSectorColors } from '../constants/sectors';
 import { mediaService } from '../services/media.service';
-import { syncService } from '../services/sync.service';
 import { farmContextService } from '../services/farm-context.service';
+import { createId } from '../utils/id';
+import { localdb } from '../services/localdb';
 
 export const AddAnomalyScreen: React.FC = () => {
   const navigate = useNavigate();
@@ -26,6 +26,7 @@ export const AddAnomalyScreen: React.FC = () => {
   const [employees, setEmployees] = useState<Employee[]>([]);
 
   const [responsible, setResponsible] = useState<string>('');
+  const [responsibleEmployeeId, setResponsibleEmployeeId] = useState('');
   const [sector, setSector] = useState<string>('');
   const [description, setDescription] = useState('');
   const [immediateSolution, setImmediateSolution] = useState('');
@@ -33,20 +34,29 @@ export const AddAnomalyScreen: React.FC = () => {
 
   const [loading, setLoading] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
-
-  const selectedEmployee = employees.find(emp => emp.name === responsible);
-
   useEffect(() => {
+    let mounted = true;
     const loadLists = async () => {
-      const emps = await db.getEmployees();
-      emps.sort((a, b) => a.name.localeCompare(b.name));
-      setEmployees(emps);
-      const ctx = farmContextService.getContext();
-      if (ctx?.employee_name) setResponsible(ctx.employee_name);
-      if (SECTORS_LIST.length > 0 && !sector) setSector(SECTORS_LIST[0]);
+      try {
+        const emps = await db.getEmployees();
+        emps.sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'pt-BR'));
+        if (mounted) setEmployees(emps);
+      } catch (error) {
+        console.error('[AddAnomaly] Falha ao carregar funcionários:', error);
+      }
+      if (mounted) {
+        const ctx = farmContextService.getContext();
+        if (ctx?.employee_name) setResponsible(ctx.employee_name);
+        if (ctx?.employee_id) setResponsibleEmployeeId(String(ctx.employee_id));
+        if (SECTORS_LIST.length > 0) setSector((current) => current || SECTORS_LIST[0]);
+      }
     };
-    loadLists();
+    void loadLists();
+    const unsubscribe = localdb.subscribe('employees', () => loadLists());
+    return () => {
+      mounted = false;
+      unsubscribe?.();
+    };
   }, []);
 
   const blobToBase64 = (blob: Blob): Promise<string> => {
@@ -69,6 +79,7 @@ export const AddAnomalyScreen: React.FC = () => {
     setAnalyzing(true);
     notify("Analisando imagem com IA...", "info");
     try {
+      const { ai } = await import('../services/ai');
       const blob = await mediaService.readMediaData(photo);
       if (!blob) throw new Error('Não foi possível ler a imagem');
       const base64Data = await blobToBase64(blob);
@@ -132,10 +143,10 @@ export const AddAnomalyScreen: React.FC = () => {
 
     setLoading(true);
     const newAnomaly: Anomaly = {
-      id: crypto.randomUUID(),
+      id: createId(),
       createdAt: timestamp,
       responsible,
-      employee_id: selectedEmployee?.id || farmContextService.getContext()?.employee_id,
+      employee_id: responsibleEmployeeId || farmContextService.getContext()?.employee_id,
       employee_name: responsible || farmContextService.getContext()?.employee_name,
       sector,
       description,
@@ -148,11 +159,6 @@ export const AddAnomalyScreen: React.FC = () => {
     try {
       await db.addAnomaly(newAnomaly);
       notify("Anomalia registrada com sucesso!", "success");
-
-      // Iniciar sincronização em segundo plano (sem await)
-      syncService.syncAll().catch(err => {
-        console.error('Erro em background sync após salvar anomalia:', err);
-      });
 
       // Navegar IMEDIATAMENTE após o save local
       navigate('/anomalies/list');
@@ -178,8 +184,12 @@ export const AddAnomalyScreen: React.FC = () => {
         <EmployeeConfirmField
           label="Responsável"
           value={responsible}
+          employeeId={responsibleEmployeeId}
           employees={employees}
-          onChange={setResponsible}
+          onChange={(name, employeeId) => {
+            setResponsible(name);
+            setResponsibleEmployeeId(employeeId);
+          }}
           helpText="Nome usado automaticamente pela ativação deste aparelho."
         />
 

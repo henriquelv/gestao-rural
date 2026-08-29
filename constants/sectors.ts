@@ -67,9 +67,13 @@ export const DEFAULT_SECTOR_BASE_COLOR: Record<SectorType, string> = {
   'Criação': '#FB923C'
 };
 
-export const SECTOR_COLOR: Record<SectorType, SectorColor> = Object.fromEntries(
-  (SECTORS_LIST as readonly SectorType[]).map((s) => [s, makeSectorColor(DEFAULT_SECTOR_BASE_COLOR[s])])
-) as any;
+export const SECTOR_COLOR = (SECTORS_LIST as readonly SectorType[]).reduce<Record<SectorType, SectorColor>>(
+  (colors, sector) => {
+    colors[sector] = makeSectorColor(DEFAULT_SECTOR_BASE_COLOR[sector]);
+    return colors;
+  },
+  {} as Record<SectorType, SectorColor>
+);
 
 const overridesKey = 'sector_color_overrides_v1';
 export const getSectorColorOverrides = (): Partial<Record<SectorType, string>> => {
@@ -113,4 +117,21 @@ export const getSectors = (): string[] => [...SECTORS_LIST];
  */
 export const isValidSector = (sector: string): sector is SectorType => {
   return SECTORS_LIST.includes(sector as SectorType);
+};
+
+const normalizeSectorKey = (value: string): string => value
+  .normalize('NFD')
+  .replace(/[\u0300-\u036f]/g, '')
+  .trim()
+  .toLocaleLowerCase('pt-BR');
+
+const SECTOR_BY_NORMALIZED_NAME = new Map(
+  SECTORS_LIST.map((sector) => [normalizeSectorKey(sector), sector] as const)
+);
+
+export const canonicalizeSector = (value: unknown): string => {
+  if (typeof value !== 'string') return '';
+  const raw = value.trim();
+  if (!raw) return '';
+  return SECTOR_BY_NORMALIZED_NAME.get(normalizeSectorKey(raw)) || raw;
 };

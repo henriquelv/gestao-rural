@@ -1,4 +1,5 @@
 import { AppActivationContext } from '../types';
+import { createId } from '../utils/id';
 
 const CONTEXT_KEY = 'gestao_rural_farm_context_v2';
 const DEVICE_KEY = 'gestao_rural_device_id_v1';
@@ -13,11 +14,7 @@ const safeJsonParse = <T>(raw: string | null): T | null => {
 };
 
 const createDeviceId = () => {
-  try {
-    return crypto.randomUUID();
-  } catch {
-    return `device_${Date.now()}_${Math.random().toString(16).slice(2)}`;
-  }
+  return `device_${createId()}`;
 };
 
 export const farmContextService = {

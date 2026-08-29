@@ -14,6 +14,8 @@ import { validateFileSize } from '../../utils/media-compression';
 import { mediaService } from '../../services/media.service';
 import { getSectorColors } from '../../constants/sectors';
 import { farmContextService } from '../../services/farm-context.service';
+import { createId } from '../../utils/id';
+import { localdb } from '../../services/localdb';
 
 export const AddNoticeScreen: React.FC = () => {
   const navigate = useNavigate();
@@ -26,11 +28,10 @@ export const AddNoticeScreen: React.FC = () => {
 
   const [content, setContent] = useState('');
   const [responsible, setResponsible] = useState('');
+  const [responsibleEmployeeId, setResponsibleEmployeeId] = useState('');
   const [sector, setSector] = useState('');
   const [media, setMedia] = useState<MediaItem[]>([]);
   const [isSaving, setIsSaving] = useState(false);
-  const selectedEmployee = employees.find(emp => emp.name === responsible);
-
   const handleGalleryPick = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
     if (!f) return;
@@ -48,12 +49,15 @@ export const AddNoticeScreen: React.FC = () => {
       setEmployees(emps);
       const ctx = farmContextService.getContext();
       if (ctx?.employee_name) setResponsible(ctx.employee_name);
+      if (ctx?.employee_id) setResponsibleEmployeeId(String(ctx.employee_id));
       const s = await db.getSectors();
       const cleaned = (s || []).map((x) => (x || '').toString().trim()).filter((x) => x.length > 0);
       setSectors(cleaned);
       if (cleaned.length > 0) setSector(cleaned[0]);
     };
-    load();
+    void load();
+    const unsubscribe = localdb.subscribe('employees', () => { void load(); });
+    return () => unsubscribe();
   }, []);
 
   const appendText = (setter: React.Dispatch<React.SetStateAction<string>>, text: string) => {
@@ -95,11 +99,11 @@ export const AddNoticeScreen: React.FC = () => {
     try {
       const ctx = farmContextService.getContext();
       await db.addNotice({
-        id: crypto.randomUUID(),
+        id: createId(),
         createdAt: timestamp,
         content: finalContent,
         responsible,
-        employee_id: selectedEmployee?.id || ctx?.employee_id,
+        employee_id: responsibleEmployeeId || ctx?.employee_id,
         employee_name: responsible || ctx?.employee_name,
         media
       });
@@ -126,8 +130,12 @@ export const AddNoticeScreen: React.FC = () => {
         <EmployeeConfirmField
           label="Responsável"
           value={responsible}
+          employeeId={responsibleEmployeeId}
           employees={employees}
-          onChange={setResponsible}
+          onChange={(name, employeeId) => {
+            setResponsible(name);
+            setResponsibleEmployeeId(employeeId);
+          }}
           helpText="Nome do funcionário que está criando o comunicado."
         />
 

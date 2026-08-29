@@ -23,6 +23,14 @@
 </head>
   <body>
     <div id="root"></div>
-  <script type="module" src="/index.tsx"></script>
+    <script src="/compatibility.js"></script>
+    <script nomodule>
+      document.getElementById('root').innerHTML =
+        '<main style="padding:24px;font-family:Arial,sans-serif;color:#111827">' +
+        '<h1 style="font-size:20px">Android System WebView desatualizado</h1>' +
+        '<p>Atualize o Android System WebView ou o Google Chrome e abra o Gestao Rural novamente.</p>' +
+        '</main>';
+    </script>
+    <script type="module" src="/index.tsx"></script>
 </body>
 </html>

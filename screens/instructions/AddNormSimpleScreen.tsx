@@ -14,6 +14,8 @@ import { PinRequestModal } from '../../components/PinRequestModal';
 import { authService } from '../../services/auth.service';
 import { mediaService } from '../../services/media.service';
 import { farmContextService } from '../../services/farm-context.service';
+import { createId } from '../../utils/id';
+import { localdb } from '../../services/localdb';
 
 export const AddNormSimpleScreen: React.FC = () => {
   const navigate = useNavigate();
@@ -26,19 +28,22 @@ export const AddNormSimpleScreen: React.FC = () => {
   const [title, setTitle] = useState('');
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [responsible, setResponsible] = useState('');
+  const [responsibleEmployeeId, setResponsibleEmployeeId] = useState('');
   const [docFile, setDocFile] = useState<MediaItem | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [showPinModal, setShowPinModal] = useState(false);
-  const selectedEmployee = employees.find(emp => emp.name === responsible);
-
   useEffect(() => {
     const load = async () => {
       const emps = await db.getEmployees();
       emps.sort((a, b) => a.name.localeCompare(b.name));
       setEmployees(emps);
-      setResponsible(farmContextService.getEmployeeName() || 'Administrador');
+      const ctx = farmContextService.getContext();
+      setResponsible(ctx?.employee_name || 'Administrador');
+      setResponsibleEmployeeId(ctx?.employee_id ? String(ctx.employee_id) : '');
     };
-    load();
+    void load();
+    const unsubscribe = localdb.subscribe('employees', () => { void load(); });
+    return () => unsubscribe();
   }, []);
 
   const appendText = (setter: React.Dispatch<React.SetStateAction<string>>, text: string) => {
@@ -86,11 +91,11 @@ export const AddNormSimpleScreen: React.FC = () => {
       setIsSaving(true);
       try {
         const newDoc: FarmDoc = {
-            id: crypto.randomUUID(),
+            id: createId(),
             title: title,
             sector: categoryId || 'Geral', // Usamos o ID da categoria como "Setor" para filtrar depois
             responsible,
-            employee_id: selectedEmployee?.id || farmContextService.getContext()?.employee_id,
+            employee_id: responsibleEmployeeId || farmContextService.getContext()?.employee_id,
             employee_name: responsible || farmContextService.getContext()?.employee_name,
             updatedAt: timestamp, 
             media: docFile
@@ -119,8 +124,12 @@ export const AddNormSimpleScreen: React.FC = () => {
         <EmployeeConfirmField
           label="Responsável"
           value={responsible}
+          employeeId={responsibleEmployeeId}
           employees={employees}
-          onChange={setResponsible}
+          onChange={(name, employeeId) => {
+            setResponsible(name);
+            setResponsibleEmployeeId(employeeId);
+          }}
           helpText="Nome que ficará vinculado a este documento."
         />
         

@@ -11,6 +11,10 @@ import { useImageZoom } from '../../utils/useImageZoom';
 import { PinRequestModal } from '../../components/PinRequestModal';
 import { notify } from '../../services/notification.service';
 import { EmptyState, FilterOption, FilterSheet, FilterToolbar } from '../../components/UiPrimitives';
+import { MediaThumbnail } from '../../components/MediaThumbnail';
+import { getAnomalyDate, getAnomalyTime, getBusinessDateKey, getBusinessMonthKey } from '../../utils/anomaly-months';
+
+const PAGE_SIZE = 40;
 
 export const ListImprovementsScreen: React.FC = () => {
   const [items, setItems] = useState<Improvement[]>([]);
@@ -19,7 +23,7 @@ export const ListImprovementsScreen: React.FC = () => {
   const [viewingMedia, setViewingMedia] = useState<MediaItem | null>(null);
   const [viewingUrl, setViewingUrl] = useState<string>('');
   const [viewingZoom, setViewingZoom] = useState(1);
-  const [mediaUrls, setMediaUrls] = useState<Record<string, string>>({});
+  const [visibleLimit, setVisibleLimit] = useState(PAGE_SIZE);
 
   const [filterSectors, setFilterSectors] = useState<string[]>([]);
   const [filterPeriod, setFilterPeriod] = useState<'all' | 'today' | '7days' | 'month'>('all');
@@ -32,12 +36,6 @@ export const ListImprovementsScreen: React.FC = () => {
   // Gestos de zoom
   const viewingZoomGestures = useImageZoom((newZoom) => setViewingZoom(newZoom));
 
-  const bestMediaUrl = (m: MediaItem | null | undefined) => {
-    if (!m) return '';
-    const cached = m.id ? (mediaUrls[m.id] || '') : '';
-    return cached || m.remoteUrl || m.uri || '';
-  };
-
   useEffect(() => {
     let mounted = true;
     const load = async () => { if (!mounted) return; const data = await db.getImprovements(); if (mounted) setItems(data); };
@@ -45,31 +43,6 @@ export const ListImprovementsScreen: React.FC = () => {
     const unsub = localdb.subscribe('improvements', () => { load(); });
     return () => { mounted = false; unsub && unsub(); };
   }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    const loadThumbs = async () => {
-      const entries: Array<[string, string]> = [];
-      for (const it of items) {
-        for (const m of it.media || []) {
-          if (!m?.id) continue;
-          if (mediaUrls[m.id]) continue;
-          const url = await mediaService.loadMediaUrl(m);
-          if (url) entries.push([m.id, url]);
-        }
-      }
-      if (cancelled) return;
-      if (entries.length > 0) {
-        setMediaUrls(prev => {
-          const next = { ...prev };
-          for (const [id, url] of entries) next[id] = url;
-          return next;
-        });
-      }
-    };
-    if (items.length > 0) loadThumbs();
-    return () => { cancelled = true; };
-  }, [items]);
 
   const toggleSectorFilter = (s: string) => {
     setFilterSectors(prev => prev.includes(s) ? prev.filter(i => i !== s) : [...prev, s]);
@@ -79,36 +52,41 @@ export const ListImprovementsScreen: React.FC = () => {
     let res = [...items];
     if (filterSectors.length > 0) res = res.filter(i => filterSectors.includes(i.sector));
     if (filterPeriod === 'today') {
-      const today = new Date().toLocaleDateString('pt-BR');
-      res = res.filter(i => new Date(i.createdAt).toLocaleDateString('pt-BR') === today);
+      const today = getBusinessDateKey(new Date());
+      res = res.filter(i => getBusinessDateKey(i.createdAt) === today);
     } else if (filterPeriod === '7days') {
-      const cutoff = new Date();
-      cutoff.setDate(cutoff.getDate() - 7);
-      res = res.filter(i => new Date(i.createdAt) >= cutoff);
+      const cutoff = getBusinessDateKey(new Date(Date.now() - (7 * 24 * 60 * 60 * 1000)));
+      res = res.filter(i => getBusinessDateKey(i.createdAt) >= cutoff);
     } else if (filterPeriod === 'month') {
-      const month = new Date().toISOString().substring(0, 7);
-      res = res.filter(i => i.createdAt.startsWith(month));
+      const month = getBusinessMonthKey(new Date());
+      res = res.filter(i => getBusinessMonthKey(i.createdAt) === month);
     }
     if (filterEmployee) {
-      res = res.filter(i => (i.employee_name || i.employee || '').toLowerCase() === filterEmployee.toLowerCase());
+      res = res.filter(i => String(i.employee_name || i.employee || '').toLowerCase() === filterEmployee.toLowerCase());
     }
-    if (filterMedia === 'with') res = res.filter(i => (i.media || []).length > 0);
-    if (filterMedia === 'without') res = res.filter(i => !i.media || i.media.length === 0);
+    if (filterMedia === 'with') res = res.filter(i => (Array.isArray(i.media) ? i.media : []).length > 0);
+    if (filterMedia === 'without') res = res.filter(i => (Array.isArray(i.media) ? i.media : []).length === 0);
     if (searchTerm.trim()) {
       const term = searchTerm.trim().toLowerCase();
-      res = res.filter(i => i.description.toLowerCase().includes(term)
-        || i.sector.toLowerCase().includes(term)
-        || (i.employee || '').toLowerCase().includes(term)
-        || (i.employee_name || '').toLowerCase().includes(term));
+      res = res.filter(i => String(i.description || '').toLowerCase().includes(term)
+        || String(i.sector || '').toLowerCase().includes(term)
+        || String(i.employee || '').toLowerCase().includes(term)
+        || String(i.employee_name || '').toLowerCase().includes(term));
     }
-    res.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    res.sort((a, b) => getAnomalyTime(b.createdAt) - getAnomalyTime(a.createdAt));
     return res;
   }, [items, filterSectors, filterPeriod, filterEmployee, filterMedia, searchTerm]);
 
   const employeeOptions = useMemo(() => {
-    const names = items.map(i => i.employee_name || i.employee).filter(Boolean);
+    const names = items.map(i => String(i.employee_name || i.employee || '').trim()).filter(Boolean);
     return Array.from(new Set(names)).sort((a, b) => a.localeCompare(b));
   }, [items]);
+
+  const visibleItems = useMemo(() => filteredItems.slice(0, visibleLimit), [filteredItems, visibleLimit]);
+
+  useEffect(() => {
+    setVisibleLimit(PAGE_SIZE);
+  }, [filterSectors, filterPeriod, filterEmployee, filterMedia, searchTerm]);
 
   const activeFiltersCount = filterSectors.length
     + (filterPeriod !== 'all' ? 1 : 0)
@@ -171,10 +149,11 @@ export const ListImprovementsScreen: React.FC = () => {
 
       <div className="flex-1 bg-gray-100 p-4 overflow-y-auto">
         <div className="space-y-3">
-          {filteredItems.map(i => {
-            const photo = i.media?.find(m => m.type === 'photo');
-            const hasVideo = i.media?.some(m => m.type === 'video');
-            const hasDocs = i.media?.some(m => ['pdf', 'doc', 'ppt'].includes(m.type));
+          {visibleItems.map(i => {
+            const media = Array.isArray(i.media) ? i.media : [];
+            const photo = media.find(m => m?.type === 'photo');
+            const hasVideo = media.some(m => m?.type === 'video');
+            const hasDocs = media.some(m => ['pdf', 'doc', 'ppt'].includes(m?.type));
             const employeeName = i.employee_name || i.employee;
             
             return (
@@ -204,7 +183,7 @@ export const ListImprovementsScreen: React.FC = () => {
                         {i.description}
                       </p>
                       <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500">
-                        <span className="inline-flex items-center gap-1"><Calendar size={13} />{new Date(i.createdAt).toLocaleDateString('pt-BR')}</span>
+                        <span className="inline-flex items-center gap-1"><Calendar size={13} />{getAnomalyDate(i.createdAt)?.toLocaleDateString('pt-BR') || 'Sem data'}</span>
                         <span className="inline-flex items-center gap-1 min-w-0"><User size={13} /><span className="truncate max-w-[120px]">{employeeName}</span></span>
                         {(photo || hasVideo || hasDocs) && (
                           <span className="inline-flex items-center gap-1 text-blue-600 font-bold"><Paperclip size={13} />{i.media.length}</span>
@@ -217,6 +196,15 @@ export const ListImprovementsScreen: React.FC = () => {
             );
           })}
           {filteredItems.length === 0 && <EmptyState title="Nenhuma melhoria encontrada" description="Ajuste os filtros ou registre uma nova melhoria." />}
+          {visibleItems.length < filteredItems.length && (
+            <button
+              type="button"
+              onClick={() => setVisibleLimit((current) => current + PAGE_SIZE)}
+              className="w-full min-h-12 rounded-lg border border-gray-300 bg-white px-4 text-sm font-black text-gray-800 shadow-sm"
+            >
+              Carregar mais ({filteredItems.length - visibleItems.length} restantes)
+            </button>
+          )}
         </div>
       </div>
 
@@ -286,20 +274,9 @@ export const ListImprovementsScreen: React.FC = () => {
               <div className="bg-gray-50 p-4 rounded-xl border border-gray-100 mb-4"><p className="text-gray-800 text-lg">{selectedItem.description}</p></div>
               {selectedItem.media.length > 0 && <div className="grid grid-cols-2 gap-2">{selectedItem.media.map(m => (
                 <div key={m.id} className="h-40 bg-gray-100 rounded-lg overflow-hidden relative flex items-center justify-center cursor-pointer" onClick={() => openMedia(m)}>
-                  {m.type === 'photo' ? (
-                    bestMediaUrl(m) ? (
-                      <img
-                        src={bestMediaUrl(m)}
-                        className="w-full h-full object-cover"
-                        onError={(e) => {
-                          const next = m.remoteUrl || m.uri || '';
-                          if (next && (e.currentTarget as HTMLImageElement).src !== next) {
-                            (e.currentTarget as HTMLImageElement).src = next;
-                          }
-                        }}
-                      />
-                    ) : getIcon(m.type)
-                  ) : getIcon(m.type)}
+                  {m.type === 'photo'
+                    ? <MediaThumbnail item={m} alt="Foto da melhoria" className="w-full h-full object-cover" />
+                    : getIcon(m.type)}
                 </div>
               ))}</div>}
             </div>

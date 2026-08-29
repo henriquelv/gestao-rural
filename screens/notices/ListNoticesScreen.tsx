@@ -15,6 +15,9 @@ import { PinRequestModal } from '../../components/PinRequestModal';
 import { EmptyState, FilterOption, FilterSheet, FilterToolbar } from '../../components/UiPrimitives';
 import { SECTORS_LIST } from '../../constants/sectors';
 import { Trash2, User, Image as ImageIcon, Video, FileText, Presentation, Download, X, Calendar, LayoutGrid, Paperclip, Search } from 'lucide-react';
+import { getAnomalyDate, getAnomalyTime, getBusinessDateKey, getBusinessMonthKey } from '../../utils/anomaly-months';
+
+const PAGE_SIZE = 40;
 
 export const ListNoticesScreen: React.FC = () => {
   const navigate = useNavigate();
@@ -30,6 +33,7 @@ export const ListNoticesScreen: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [showPinModal, setShowPinModal] = useState(false);
   const [pendingAction, setPendingAction] = useState<(() => Promise<void> | void) | null>(null);
+  const [visibleLimit, setVisibleLimit] = useState(PAGE_SIZE);
 
   // Gestos de zoom
   const viewingZoomGestures = useImageZoom((newZoom) => setViewingZoom(newZoom));
@@ -37,20 +41,6 @@ export const ListNoticesScreen: React.FC = () => {
   const load = async () => {
     const data = await db.getNotices();
     setNotices(data);
-  };
-
-  const [photoUrls, setPhotoUrls] = useState<Record<string, string>>({});
-
-  const loadPhotos = async (data: Notice[]) => {
-    const urls: Record<string, string> = {};
-    for (const n of data) {
-      const photo = n.media?.find(m => m.type === 'photo');
-      if (photo) {
-        const url = await mediaService.loadMediaUrl(photo);
-        if (url) urls[n.id] = url;
-      }
-    }
-    setPhotoUrls(urls);
   };
 
   const parseSectorFromContent = (content: string) => {
@@ -71,16 +61,8 @@ export const ListNoticesScreen: React.FC = () => {
     return () => { window.removeEventListener('online', onOnline); unsub && unsub(); };
   }, []);
 
-  useEffect(() => {
-    if (notices.length > 0) loadPhotos(notices);
-  }, [notices]);
-
   const localDay = (iso: string) => {
-    try {
-      return new Date(iso).toLocaleDateString('pt-BR');
-    } catch {
-      return '';
-    }
+    return getAnomalyDate(iso)?.toLocaleDateString('pt-BR') || 'Sem data';
   };
 
   const toggleSectorFilter = (sector: string) => {
@@ -90,15 +72,14 @@ export const ListNoticesScreen: React.FC = () => {
   const filteredNotices = useMemo(() => {
     let res = [...notices];
     if (filterPeriod === 'today') {
-      const today = new Date().toLocaleDateString('pt-BR');
-      res = res.filter(n => localDay(n.createdAt) === today);
+      const today = getBusinessDateKey(new Date());
+      res = res.filter(n => getBusinessDateKey(n.createdAt) === today);
     } else if (filterPeriod === '7days') {
-      const cutoff = new Date();
-      cutoff.setDate(cutoff.getDate() - 7);
-      res = res.filter(n => new Date(n.createdAt) >= cutoff);
+      const cutoff = getBusinessDateKey(new Date(Date.now() - (7 * 24 * 60 * 60 * 1000)));
+      res = res.filter(n => getBusinessDateKey(n.createdAt) >= cutoff);
     } else if (filterPeriod === 'month') {
-      const month = new Date().toISOString().slice(0, 7);
-      res = res.filter(n => n.createdAt.startsWith(month));
+      const month = getBusinessMonthKey(new Date());
+      res = res.filter(n => getBusinessMonthKey(n.createdAt) === month);
     }
     if (filterSectors.length > 0) {
       res = res.filter(n => filterSectors.includes(parseSectorFromContent(n.content).sector));
@@ -118,14 +99,20 @@ export const ListNoticesScreen: React.FC = () => {
           || (n.employee_name || '').toLowerCase().includes(term);
       });
     }
-    res.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    res.sort((a, b) => getAnomalyTime(b.createdAt) - getAnomalyTime(a.createdAt));
     return res;
   }, [notices, filterPeriod, filterSectors, filterResponsible, filterMedia, searchTerm]);
 
   const responsibleOptions = useMemo(() => {
-    const names = notices.map(n => n.employee_name || n.responsible).filter(Boolean);
+    const names = notices.map(n => String(n.employee_name || n.responsible || '').trim()).filter(Boolean);
     return Array.from(new Set(names)).sort((a, b) => a.localeCompare(b));
   }, [notices]);
+
+  const visibleNotices = useMemo(() => filteredNotices.slice(0, visibleLimit), [filteredNotices, visibleLimit]);
+
+  useEffect(() => {
+    setVisibleLimit(PAGE_SIZE);
+  }, [filterPeriod, filterSectors, filterResponsible, filterMedia, searchTerm]);
 
   const activeFiltersCount = filterSectors.length
     + (filterPeriod !== 'all' ? 1 : 0)
@@ -193,7 +180,7 @@ export const ListNoticesScreen: React.FC = () => {
         remoteUrl = media.uri || '';
       }
 
-      if (isRemoteHttpUrl(remoteUrl)) {
+      if (navigator.onLine && isRemoteHttpUrl(remoteUrl)) {
         console.log('Download usando URL remota:', remoteUrl);
         await downloadService.downloadFile(remoteUrl, media.name || 'documento', media.mimeType || '', media.localPath);
         return;
@@ -224,7 +211,7 @@ export const ListNoticesScreen: React.FC = () => {
 
       <div className="flex-1 bg-gray-100 p-4 overflow-y-auto">
         <div className="space-y-3">
-          {filteredNotices.map(n => {
+          {visibleNotices.map(n => {
             const parsed = parseSectorFromContent(n.content);
             const sector = parsed.sector;
             const content = parsed.content;
@@ -258,7 +245,7 @@ export const ListNoticesScreen: React.FC = () => {
                         {content}
                       </p>
                       <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500">
-                        <span className="inline-flex items-center gap-1"><Calendar size={13} />{new Date(n.createdAt).toLocaleDateString('pt-BR')}</span>
+                        <span className="inline-flex items-center gap-1"><Calendar size={13} />{localDay(n.createdAt)}</span>
                         <span className="inline-flex items-center gap-1 min-w-0"><User size={13} /><span className="truncate max-w-[120px]">{author}</span></span>
                         {(photo || hasVideo || hasDocs) && (
                           <span className="inline-flex items-center gap-1 text-blue-600 font-bold">
@@ -274,6 +261,15 @@ export const ListNoticesScreen: React.FC = () => {
           })}
           {filteredNotices.length === 0 && (
             <EmptyState title="Nenhum comunicado encontrado" description="Ajuste os filtros ou registre um novo comunicado." />
+          )}
+          {visibleNotices.length < filteredNotices.length && (
+            <button
+              type="button"
+              onClick={() => setVisibleLimit((current) => current + PAGE_SIZE)}
+              className="w-full min-h-12 rounded-lg border border-gray-300 bg-white px-4 text-sm font-black text-gray-800 shadow-sm"
+            >
+              Carregar mais ({filteredNotices.length - visibleNotices.length} restantes)
+            </button>
           )}
         </div>
       </div>

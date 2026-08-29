@@ -5,6 +5,7 @@ export interface AnomalyMonthData {
   month: string;
   label: string;
   bySetor: Record<SectorType, number>;
+  unknownCount: number;
 }
 
 const MONTH_LABELS = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
@@ -16,10 +17,36 @@ export interface AnomalyDateParts {
   time: number;
 }
 
+export const ANOMALY_BUSINESS_TIME_ZONE = 'America/Sao_Paulo';
+
+const dateFromTimeZone = (value: string): Date | null => {
+  const instant = new Date(value);
+  if (Number.isNaN(instant.getTime())) return null;
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: ANOMALY_BUSINESS_TIME_ZONE,
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23'
+    }).formatToParts(instant).reduce<Record<string, string>>((result, part) => {
+      result[part.type] = part.value;
+      return result;
+    }, {});
+    return new Date(
+      Number(parts.year), Number(parts.month) - 1, Number(parts.day),
+      Number(parts.hour), Number(parts.minute), Number(parts.second), instant.getMilliseconds()
+    );
+  } catch {
+    // WebViews Android antigos podem não conhecer o identificador de timezone.
+    // Nesses aparelhos, a data local ainda é preferível a derrubar a tela inteira.
+    return instant;
+  }
+};
+
 export function getAnomalyDate(value: string): Date | null {
   if (!value) return null;
   const iso = value.match(/^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?)?/);
   if (iso) {
+    if (/Z$|[+-]\d{2}:?\d{2}$/.test(value)) return dateFromTimeZone(value);
     const year = Number(iso[1]);
     const month = Number(iso[2]);
     const day = Number(iso[3]);
@@ -62,6 +89,17 @@ export function getAnomalyTime(value: string): number {
   return getAnomalyDate(value)?.getTime() ?? 0;
 }
 
+export function getBusinessDateKey(value: string | Date): string {
+  const source = value instanceof Date ? value.toISOString() : value;
+  const parts = getAnomalyDateParts(source);
+  if (!parts) return '';
+  return `${parts.year}-${String(parts.monthIndex + 1).padStart(2, '0')}-${String(parts.day).padStart(2, '0')}`;
+}
+
+export function getBusinessMonthKey(value: string | Date): string {
+  return getBusinessDateKey(value).slice(0, 7);
+}
+
 export function isAnomalyInDateRange(value: string, startDate: string, endDate: string): boolean {
   const date = getAnomalyDate(value);
   const start = getAnomalyDate(startDate);
@@ -81,7 +119,8 @@ export function groupAnomaliesByMonth(anomalies: Anomaly[], year: number): Anoma
     return {
       month: `${year}-${String(monthIndex + 1).padStart(2, '0')}`,
       label: `${MONTH_LABELS[monthIndex]} ${String(year).slice(-2)}`,
-      bySetor
+      bySetor,
+      unknownCount: 0
     };
   });
 
@@ -89,10 +128,11 @@ export function groupAnomaliesByMonth(anomalies: Anomaly[], year: number): Anoma
     const parts = getAnomalyDateParts(anomaly.createdAt);
     if (!parts || parts.year !== year) return;
 
-    const sector = SECTORS_LIST.includes(anomaly.sector as SectorType)
-      ? (anomaly.sector as SectorType)
-      : 'Ordenha';
-    months[parts.monthIndex].bySetor[sector]++;
+    if (SECTORS_LIST.includes(anomaly.sector as SectorType)) {
+      months[parts.monthIndex].bySetor[anomaly.sector as SectorType]++;
+    } else {
+      months[parts.monthIndex].unknownCount++;
+    }
   });
 
   return months;

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Filter, X, Calendar, LayoutGrid, List as ListIcon, Table as TableIcon, FileText, Video, Download, Presentation, Image as ImageIcon } from 'lucide-react';
+import { Filter, X, Calendar, LayoutGrid, List as ListIcon, Table as TableIcon, FileText, Video, Download, Presentation, Image as ImageIcon, Loader2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { Layout } from '../../components/Layout';
 import { Header } from '../../components/Header';
@@ -12,10 +12,17 @@ export const InstructionsMenuScreen: React.FC = () => {
   const [ui, setUi] = useState<UIConfig | null>(null);
 
   useEffect(() => {
-    db.getUIConfig().then(setUi);
+    db.getUIConfig().then(setUi).catch((error) => console.error('[InstructionsMenu] Falha ao carregar menu:', error));
   }, []);
 
-  if (!ui) return null;
+  if (!ui) return (
+    <Layout>
+      <Header title="Instruções de Trabalho" targetRoute="/" />
+      <div className="flex flex-1 items-center justify-center gap-2 text-gray-600 font-bold">
+        <Loader2 size={20} className="animate-spin" /> Preparando menu...
+      </div>
+    </Layout>
+  );
 
   const buttons = ui.buttons
     .filter(b => b.screen === 'instructions_menu' && b.visible)

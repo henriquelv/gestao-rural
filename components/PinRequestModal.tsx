@@ -13,14 +13,19 @@ interface PinRequestModalProps {
 
 export const PinRequestModal: React.FC<PinRequestModalProps> = ({ onSuccess, onClose, title = "Autorização Necessária", description = "Digite o PIN para realizar esta alteração." }) => {
   const [pin, setPin] = useState('');
+  const [errorMessage, setErrorMessage] = useState('');
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
-    if (authService.login(pin)) {
+    const result = authService.loginWithResult(pin);
+    if (result.ok) {
+      setErrorMessage('');
       notify("Acesso autorizado", "success");
       onSuccess();
     } else {
-      notify("PIN Incorreto", "error");
+      const message = result.message || 'Acesso não autorizado.';
+      setErrorMessage(message);
+      notify(message, "error");
       setPin('');
     }
   };
@@ -49,11 +54,16 @@ export const PinRequestModal: React.FC<PinRequestModalProps> = ({ onSuccess, onC
                     pattern="[0-9]*"
                     maxLength={4}
                     value={pin}
-                    onChange={e => setPin(e.target.value.replace(/\D/g, ''))}
+                    onChange={e => { setPin(e.target.value.replace(/\D/g, '')); setErrorMessage(''); }}
                     className="w-full text-center text-4xl font-black tracking-[0.5em] p-3 bg-gray-50 rounded-xl border-2 border-gray-200 focus:border-blue-500 outline-none mb-6"
                     placeholder="••••"
                     autoFocus
                 />
+                {errorMessage && (
+                  <div role="alert" className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-center text-sm font-bold text-red-700">
+                    {errorMessage}
+                  </div>
+                )}
                 <button type="submit" className="w-full bg-blue-600 active:bg-blue-700 text-white font-black text-lg py-3 rounded-xl shadow-lg flex items-center justify-center gap-2">
                     CONFIRMAR <ArrowRight size={20} />
                 </button>

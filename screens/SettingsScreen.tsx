@@ -14,6 +14,8 @@ import { PinRequestModal } from '../components/PinRequestModal';
 import { DEFAULT_SECTOR_BASE_COLOR, getSectorColorOverrides, setSectorColorOverrides, makeSectorColor, getSectorColors } from '../constants/sectors';
 import { farmContextService } from '../services/farm-context.service';
 import { AdminPanel } from '../components/AdminPanel';
+import { createId } from '../utils/id';
+import { localdb } from '../services/localdb';
 
 type Tab = 'dashboard' | 'admin' | 'registries' | 'visual' | 'data' | 'records';
 type SubTab = 'employees' | 'sectors';
@@ -141,6 +143,12 @@ export const SettingsScreen: React.FC = () => {
 
   useEffect(() => {
     loadAllData();
+    const unsubscribeEmployees = localdb.subscribe('employees', () => { void loadRegistries(); });
+    const unsubscribeSectors = localdb.subscribe('sectors', () => { void loadRegistries(); });
+    return () => {
+      unsubscribeEmployees();
+      unsubscribeSectors();
+    };
   }, []);
 
   useEffect(() => {
@@ -422,10 +430,12 @@ export const SettingsScreen: React.FC = () => {
     protectedAction(async () => {
       try {
         const newEmp: Employee = {
-          id: editingEmp ? editingEmp.id : crypto.randomUUID(),
+          ...(editingEmp || {}),
+          id: editingEmp ? editingEmp.id : createId(),
           name: empName,
           role: (empRole || 'Colaborador'),
-          photoUri: empPhoto
+          photoUri: empPhoto,
+          status: editingEmp?.status || 'active'
         };
 
         if (editingEmp) {
@@ -445,13 +455,17 @@ export const SettingsScreen: React.FC = () => {
     });
   };
 
-  const handleRemoveEmp = async (id: string) => {
+  const handleToggleEmpStatus = async (employee: Employee) => {
     protectedAction(async () => {
-      if (confirm("Remover este funcionário?")) {
-        setEmployees(prev => prev.filter(e => e.id !== id));
-        await db.removeEmployee(id);
-        notify("Removido.", "info");
-      }
+      const active = !employee.status || employee.status === 'active';
+      const nextStatus = active ? 'blocked' : 'active';
+      if (active && !confirm(`Desativar o funcionário "${employee.name}"? O histórico será preservado.`)) return;
+      const updated = { ...employee, status: nextStatus };
+      await db.updateEmployee(updated);
+      setEmployees(prev => prev
+        .map(item => item.id === updated.id ? updated : item)
+        .sort((a, b) => a.name.localeCompare(b.name)));
+      notify(active ? 'Funcionário desativado. O histórico foi preservado.' : 'Funcionário reativado.', 'info');
     });
   };
 
@@ -496,11 +510,11 @@ export const SettingsScreen: React.FC = () => {
       }
       setSectors(prev => prev.map(item => item === oldName ? newName : item));
       // Atualizar cores também
-      const colors = getSectorColorOverrides();
-      if (colors[oldName as any]) {
+      const colors = getSectorColorOverrides() as Record<string, string | undefined>;
+      if (colors[oldName]) {
         const newColors = { ...colors };
-        delete newColors[oldName as any];
-        newColors[newName as any] = colors[oldName as any];
+        delete newColors[oldName];
+        newColors[newName] = colors[oldName];
         setSectorColorOverrides(newColors as any);
         setSectorColorBase(prev => {
           const newBase = { ...prev };
@@ -824,9 +838,18 @@ export const SettingsScreen: React.FC = () => {
                       </div>
                       <div className="flex-1 min-w-0">
                         <h4 className="font-black text-gray-800 truncate text-sm">{emp.name}</h4>
+                        <span className={`text-[10px] font-black uppercase ${!emp.status || emp.status === 'active' ? 'text-green-700' : 'text-red-600'}`}>
+                          {!emp.status || emp.status === 'active' ? 'Ativo' : 'Desativado'}
+                        </span>
                       </div>
                       <button onClick={() => handleEditEmp(emp)} className="p-3 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100"><Edit2 size={18} /></button>
-                      <button onClick={() => handleRemoveEmp(emp.id)} className="p-3 bg-red-50 text-red-500 rounded-lg hover:bg-red-100"><Trash2 size={18} /></button>
+                      <button
+                        onClick={() => handleToggleEmpStatus(emp)}
+                        className={`p-3 rounded-lg ${!emp.status || emp.status === 'active' ? 'bg-red-50 text-red-500 hover:bg-red-100' : 'bg-green-50 text-green-700 hover:bg-green-100'}`}
+                        title={!emp.status || emp.status === 'active' ? 'Desativar funcionário' : 'Reativar funcionário'}
+                      >
+                        {!emp.status || emp.status === 'active' ? <Ban size={18} /> : <CheckCircle size={18} />}
+                      </button>
                     </div>
                   ))}
                   {employees.length === 0 && <p className="text-center text-gray-400 text-sm py-10">Nenhum funcionário cadastrado.</p>}
@@ -1300,8 +1323,11 @@ export const SettingsScreen: React.FC = () => {
                 onClick={() => {
                   void (async () => {
                     notify('Atualizando do servidor...', 'info');
-                    await db.refreshFromServer();
-                    notify('Atualização concluída.', 'success');
+                    const result = await db.refreshFromServer();
+                    notify(
+                      result.ok ? 'Atualização concluída.' : 'Atualização incompleta. Abra o diagnóstico para ver as tabelas com falha.',
+                      result.ok ? 'success' : 'error'
+                    );
                     await loadSyncStatus();
                   })();
                 }}
@@ -1313,8 +1339,11 @@ export const SettingsScreen: React.FC = () => {
                 onClick={() => {
                   void (async () => {
                     notify('Recarregando todos os dados do servidor...', 'info');
-                    await db.forceFullRefreshFromServer();
-                    notify('Carga completa concluída.', 'success');
+                    const result = await db.forceFullRefreshFromServer();
+                    notify(
+                      result.ok ? 'Carga completa concluída.' : 'Carga incompleta. Seus dados locais foram preservados; tente novamente.',
+                      result.ok ? 'success' : 'error'
+                    );
                     await loadSyncStatus();
                   })();
                 }}
@@ -1382,11 +1411,11 @@ export const SettingsScreen: React.FC = () => {
                   </button>
                 </div>
 
-                {syncStatus?.errors?.length > 0 && (
+                {(syncStatus?.errors?.length || 0) > 0 && (
                   <div className="mt-3">
                     <div className="text-[10px] uppercase font-black text-gray-500 mb-2">Erros recentes</div>
                     <div className="space-y-2">
-                      {syncStatus.errors.slice(0, 5).map((e: any) => (
+                      {syncStatus?.errors?.slice(0, 5).map((e: any) => (
                         <div key={String(e.id)} className="bg-white border border-red-200 rounded-lg p-3">
                           <div className="text-xs font-black text-red-700">{e.tableName || e.table_name}</div>
                           <div className="text-[11px] text-gray-700 font-bold mt-1 line-clamp-2">{e.errorMessage || e.error_message || 'Erro'}</div>

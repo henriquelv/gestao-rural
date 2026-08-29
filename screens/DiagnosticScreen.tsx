@@ -23,6 +23,7 @@ import { farmContextService } from '../services/farm-context.service';
 import { localdb } from '../services/localdb';
 import { notify } from '../services/notification.service';
 import { syncService } from '../services/sync.service';
+import { supabaseConfig } from '../services/supabase';
 
 type OutboxSummary = {
   total: number;
@@ -46,11 +47,13 @@ type DiagnosticData = {
   access: { ok: boolean; offline?: boolean; message?: string } | null;
   outbox: OutboxSummary;
   syncStatus: any;
+  syncInFlight: boolean;
   lastSyncAt: string | null;
   runtimeError: any | null;
   logs: any[];
   localCounts: Record<string, number>;
   anomalyAudit: AnomalyAudit | null;
+  nativeDb: { available: boolean; error: string | null } | null;
 };
 
 const MAIN_TABLES = [
@@ -125,8 +128,8 @@ export const DiagnosticScreen: React.FC = () => {
       let appInfo = {
         name: 'Gestao Rural',
         id: 'com.gestaorural.app',
-        version: '1.0.2-diagnostics',
-        build: '3'
+        version: import.meta.env.VITE_APP_VERSION || '1.0.14-android-compat-hotfix',
+        build: '13'
       };
 
       try {
@@ -161,6 +164,7 @@ export const DiagnosticScreen: React.FC = () => {
       } catch (e) {
         console.error('Erro na auditoria de anomalias:', e);
       }
+      const nativeDb = await localdb.getNativeStatus();
 
       const rawLogs = safeJson(localStorage.getItem('sync_diagnostic_logs_v1'));
 
@@ -176,11 +180,13 @@ export const DiagnosticScreen: React.FC = () => {
         access,
         outbox,
         syncStatus,
+        syncInFlight: syncService._isSyncing,
         lastSyncAt: localStorage.getItem('last_sync_at'),
         runtimeError: safeJson(localStorage.getItem('last_runtime_error')),
         logs: Array.isArray(rawLogs) ? rawLogs : [],
         localCounts,
-        anomalyAudit
+        anomalyAudit,
+        nativeDb
       });
     } finally {
       setLoading(false);
@@ -328,8 +334,11 @@ export const DiagnosticScreen: React.FC = () => {
               <InfoRow label="Versao/build" value={`${data.app.version} / ${data.app.build}`} />
               <InfoRow label="Package/applicationId" value={data.app.id} />
               <InfoRow label="Plataforma" value={`${data.app.platform}${data.app.native ? ' nativo' : ' web'}`} />
+              <InfoRow label="Supabase configuração" value={supabaseConfig.configured ? 'Configurado' : `Ausente: ${supabaseConfig.missing.join(', ')}`} />
               <InfoRow label="Supabase URL" value={data.supabaseUrl || '(não configurado)'} />
               <InfoRow label="Conexao" value={data.online ? 'Online' : 'Offline'} />
+              <InfoRow label="SQLite nativo" value={data.nativeDb ? (data.nativeDb.available ? 'Disponível' : `Indisponível: ${data.nativeDb.error || 'erro desconhecido'}`) : 'Não aplicável (web)'} />
+              <InfoRow label="Legados ambíguos" value={localStorage.getItem('legacy_ambiguous_records_v1') || '0'} />
             </section>
 
             {data.anomalyAudit && (
@@ -378,6 +387,8 @@ export const DiagnosticScreen: React.FC = () => {
               <InfoRow label="Dispositivo" value={data.context?.device_status || '-'} />
               <InfoRow label="Ultima validacao" value={labelDate(data.context?.last_license_check_at)} />
               <InfoRow label="Ultimo sync" value={labelDate(data.lastSyncAt)} />
+              <InfoRow label="Sync em andamento" value={data.syncInFlight ? 'Sim' : 'Não'} />
+              <InfoRow label="Reconciliação desta sessão" value={localStorage.getItem('full_refresh_session_reconciliation_v7') === 'true' ? 'Concluída' : 'Pendente/retry'} />
             </section>
 
             {data.outbox.lastError && (

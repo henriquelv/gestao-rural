@@ -6,6 +6,7 @@ import { Header } from '../components/Header';
 import { BigButton } from '../components/BigButton';
 import { db } from '../services/db.service';
 import { UIConfig, CustomPage, UIBlock } from '../types';
+import { Loader2 } from 'lucide-react';
 
 export const GenericMenuScreen: React.FC = () => {
   const navigate = useNavigate();
@@ -18,10 +19,17 @@ export const GenericMenuScreen: React.FC = () => {
         setUi(config);
         const page = config.customPages?.find(p => p.id === pageId);
         if (page) setCurrentPage(page);
-    });
+    }).catch((error) => console.error('[GenericMenu] Falha ao carregar menu:', error));
   }, [pageId]);
   
-  if (!ui) return null;
+  if (!ui) return (
+    <Layout>
+      <Header title="Menu" targetRoute="/" />
+      <div className="flex flex-1 items-center justify-center gap-2 text-gray-600 font-bold">
+        <Loader2 size={20} className="animate-spin" /> Preparando menu...
+      </div>
+    </Layout>
+  );
 
   // Filter buttons belonging to this custom page
   const blocks = ui.buttons

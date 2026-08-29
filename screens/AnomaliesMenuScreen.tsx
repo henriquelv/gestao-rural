@@ -6,16 +6,24 @@ import { Header } from '../components/Header';
 import { BigButton } from '../components/BigButton';
 import { db } from '../services/db.service';
 import { UIConfig } from '../types';
+import { Loader2 } from 'lucide-react';
 
 export const AnomaliesMenuScreen: React.FC = () => {
   const navigate = useNavigate();
   const [ui, setUi] = useState<UIConfig | null>(null);
 
   useEffect(() => {
-    db.getUIConfig().then(setUi);
+    db.getUIConfig().then(setUi).catch((error) => console.error('[AnomaliesMenu] Falha ao carregar menu:', error));
   }, []);
   
-  if (!ui) return null;
+  if (!ui) return (
+    <Layout>
+      <Header title="Anomalias" targetRoute="/" />
+      <div className="flex flex-1 items-center justify-center gap-2 text-gray-600 font-bold">
+        <Loader2 size={20} className="animate-spin" /> Preparando menu...
+      </div>
+    </Layout>
+  );
 
   const buttons = ui.buttons
     .filter(b => b.screen === 'anomalies_menu' && b.visible)

@@ -15,6 +15,9 @@ import { notify } from '../../services/notification.service';
 import { useImageZoom } from '../../utils/useImageZoom';
 import { PinRequestModal } from '../../components/PinRequestModal';
 import { EmptyState, FilterOption, FilterSheet, FilterToolbar } from '../../components/UiPrimitives';
+import { getAnomalyDate, getAnomalyTime, getBusinessDateKey } from '../../utils/anomaly-months';
+
+const PAGE_SIZE = 40;
 
 export const ListInstructionsScreen: React.FC = () => {
   const navigate = useNavigate();
@@ -22,7 +25,7 @@ export const ListInstructionsScreen: React.FC = () => {
   const state = location.state as { selectedSector?: string } | null;
 
   const [items, setItems] = useState<Instruction[]>([]);
-  const [photoUrls, setPhotoUrls] = useState<Record<string, string>>({});
+  const [visibleLimit, setVisibleLimit] = useState(PAGE_SIZE);
   const viewMode = 'list';
   const [showFilters, setShowFilters] = useState(false);
   const [viewingMedia, setViewingMedia] = useState<MediaItem | null>(null);
@@ -37,26 +40,12 @@ export const ListInstructionsScreen: React.FC = () => {
   const viewingZoomGestures = useImageZoom((newZoom) => setViewingZoom(newZoom));
 
   const localDay = (iso: string) => {
-    try {
-      return new Date(iso).toLocaleDateString('pt-BR');
-    } catch {
-      return '';
-    }
+    return getAnomalyDate(iso)?.toLocaleDateString('pt-BR') || 'Sem data';
   };
 
   const loadData = async () => {
     const data = await db.getInstructions();
     setItems(data);
-
-    const urls: Record<string, string> = {};
-    for (const item of data) {
-      const photo = item.media?.find(m => m.type === 'photo');
-      if (photo) {
-        const url = await mediaService.loadMediaUrl(photo);
-        if (url) urls[item.id] = url;
-      }
-    }
-    setPhotoUrls(urls);
   };
 
   useEffect(() => {
@@ -73,12 +62,11 @@ export const ListInstructionsScreen: React.FC = () => {
     let result = [...items];
     if (filterSectors.length > 0) result = result.filter(i => filterSectors.includes(i.sector));
     if (filterPeriod === 'today') {
-      const today = new Date().toISOString().split('T')[0];
-      result = result.filter(i => i.createdAt.startsWith(today));
+      const today = getBusinessDateKey(new Date());
+      result = result.filter(i => getBusinessDateKey(i.createdAt) === today);
     } else if (filterPeriod === '7days') {
-      const cutoff = new Date();
-      cutoff.setDate(cutoff.getDate() - 7);
-      result = result.filter(i => new Date(i.createdAt) >= cutoff);
+      const cutoff = getBusinessDateKey(new Date(Date.now() - (7 * 24 * 60 * 60 * 1000)));
+      result = result.filter(i => getBusinessDateKey(i.createdAt) >= cutoff);
     }
     if (filterEmployee) {
       result = result.filter(i => (i.employee_name || '').toLowerCase() === filterEmployee.toLowerCase());
@@ -94,15 +82,21 @@ export const ListInstructionsScreen: React.FC = () => {
     }
 
     // Sort by most recent
-    result.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    result.sort((a, b) => getAnomalyTime(b.createdAt) - getAnomalyTime(a.createdAt));
 
     return result;
   }, [items, filterSectors, filterPeriod, filterEmployee, filterMedia, searchTerm]);
 
   const employeeOptions = useMemo(() => {
-    const names = items.map(i => i.employee_name).filter(Boolean) as string[];
+    const names = items.map(i => String(i.employee_name || '').trim()).filter(Boolean);
     return Array.from(new Set(names)).sort((a, b) => a.localeCompare(b));
   }, [items]);
+
+  const visibleItems = useMemo(() => filteredItems.slice(0, visibleLimit), [filteredItems, visibleLimit]);
+
+  useEffect(() => {
+    setVisibleLimit(PAGE_SIZE);
+  }, [filterSectors, filterPeriod, filterEmployee, filterMedia, searchTerm]);
 
   const activeFiltersCount = filterSectors.length
     + (filterPeriod !== 'all' ? 1 : 0)
@@ -156,7 +150,7 @@ export const ListInstructionsScreen: React.FC = () => {
         remoteUrl = media.uri || '';
       }
 
-      if (isRemoteHttpUrl(remoteUrl)) {
+      if (navigator.onLine && isRemoteHttpUrl(remoteUrl)) {
         await downloadService.downloadFile(remoteUrl, media.name || 'documento', media.mimeType || '', media.localPath);
         return;
       }
@@ -186,7 +180,7 @@ export const ListInstructionsScreen: React.FC = () => {
 
       <div className="flex-1 bg-gray-100 p-4 space-y-4 overflow-y-auto">
         <div className="space-y-3">
-          {filteredItems.map((item, index) => {
+          {visibleItems.map((item) => {
             const dateStr = localDay(item.createdAt);
             const hasMedia = (item.media || []).length > 0;
             
@@ -222,6 +216,15 @@ export const ListInstructionsScreen: React.FC = () => {
         </div>
 
         {filteredItems.length === 0 && <EmptyState title="Nenhuma instrução encontrada" description="Ajuste os filtros ou registre uma nova instrução." />}
+        {visibleItems.length < filteredItems.length && (
+          <button
+            type="button"
+            onClick={() => setVisibleLimit((current) => current + PAGE_SIZE)}
+            className="w-full min-h-12 rounded-lg border border-gray-300 bg-white px-4 text-sm font-black text-gray-800 shadow-sm"
+          >
+            Carregar mais ({filteredItems.length - visibleItems.length} restantes)
+          </button>
+        )}
       </div>
 
       {showFilters && (

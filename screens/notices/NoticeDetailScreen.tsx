@@ -52,13 +52,14 @@ export const NoticeDetailScreen: React.FC = () => {
 
   useEffect(() => {
     const run = async () => {
-      if (!notice?.media?.length) {
+      const media = Array.isArray(notice?.media) ? notice.media : [];
+      if (media.length === 0) {
         setMediaUrls({});
         return;
       }
 
       const entries = await Promise.all(
-        notice.media.map(async (m) => {
+        media.map(async (m) => {
           try {
             const url = await mediaService.loadMediaUrl(m);
             return [m.id, url] as const;
@@ -132,7 +133,7 @@ export const NoticeDetailScreen: React.FC = () => {
         remoteUrl = media.uri || '';
       }
 
-      if (isRemoteHttpUrl(remoteUrl)) {
+      if (navigator.onLine && isRemoteHttpUrl(remoteUrl)) {
         await downloadService.downloadFile(remoteUrl, media.name || 'documento', media.mimeType || '', media.localPath);
         return;
       }
@@ -152,8 +153,9 @@ export const NoticeDetailScreen: React.FC = () => {
   if (!notice) return <Layout><div className="p-10 text-center">Carregando...</div></Layout>;
 
   const parsed = parseSectorFromContent(notice.content);
-  const visualMedia = notice.media.filter(m => m.type === 'photo' || m.type === 'video');
-  const docMedia = notice.media.filter(m => ['pdf', 'doc', 'ppt'].includes(m.type));
+  const media = Array.isArray(notice.media) ? notice.media : [];
+  const visualMedia = media.filter(m => m?.type === 'photo' || m?.type === 'video');
+  const docMedia = media.filter(m => ['pdf', 'doc', 'ppt'].includes(m?.type));
 
   return (
     <Layout>

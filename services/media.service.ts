@@ -3,6 +3,7 @@ import { Filesystem, Directory } from '@capacitor/filesystem';
 import { MediaItem } from '../types';
 import { webDB } from './localdb.web';
 import { supabase } from './supabase';
+import { createId } from '../utils/id';
 
 // ── Cache offline de mídia remota ──
 const CACHE_INDEX_KEY = 'media_offline_cache_v1';
@@ -185,7 +186,7 @@ export const mediaService = {
     }
 
     const inputFile = await this.maybeCompress(file, type);
-    const id = crypto.randomUUID();
+    const id = createId();
     const fileName = `${id}_${inputFile.name}`;
 
     if (this.isNative) {
@@ -284,7 +285,7 @@ export const mediaService = {
               this.cacheRemoteItem(item).catch(() => {});
               return remoteUrl;
             }
-            return '';
+            return item.type === 'photo' ? OFFLINE_PLACEHOLDER : '';
           }
         }
 
@@ -406,8 +407,10 @@ export const mediaService = {
       if (!item?.localPath) return;
 
       if (this.isNative) {
+        const resolved = resolveDataPath(String(item.localPath));
         await Filesystem.deleteFile({
-          path: item.localPath
+          path: resolved.path,
+          directory: resolved.directory ?? Directory.Data
         });
       } else {
         // Revoke any cached object URL
@@ -448,16 +451,18 @@ export const mediaService = {
     const index = _getOfflineCacheIndex();
     if (index[cacheKey]) return true; // já cacheado
 
+    let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
       // Timeout curto para não travar abertura/sync quando uma mídia remota demora.
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 10000);
-      const resp = await fetch(remoteUrl, { signal: controller.signal });
-      clearTimeout(timeout);
+      const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      if (controller) timeout = setTimeout(() => controller.abort(), 10000);
+      const resp = await fetch(remoteUrl, controller ? { signal: controller.signal } : undefined);
       if (!resp.ok) return false;
       const blob = await resp.blob();
 
-      const cacheId = `cache_${item.id || crypto.randomUUID()}`;
+      // O mesmo media.id pode existir em registros/fazendas diferentes no legado.
+      // Um sufixo único evita que um download sobrescreva o arquivo de outro.
+      const cacheId = `cache_${item.id || 'media'}_${createId()}`;
 
       if (this.isNative) {
         const base64 = await this.fileToBase64(new File([blob], cacheId));
@@ -484,6 +489,8 @@ export const mediaService = {
     } catch (e) {
       console.error('Erro ao cachear mídia offline:', e);
       return false;
+    } finally {
+      if (timeout) clearTimeout(timeout);
     }
   },
 
@@ -514,7 +521,18 @@ export const mediaService = {
     // Web: buscar blob no IndexedDB
     const record = await webDB.media_blobs.get(cachedPath);
     if (record?.blob) {
-      return URL.createObjectURL(record.blob);
+      try {
+        if (!(mediaService as any)._webUrlCache) (mediaService as any)._webUrlCache = {};
+        const cache = (mediaService as any)._webUrlCache as Record<string, { url: string; createdAt?: string }>;
+        const key = `offline:${cachedPath}`;
+        if (cache[key]?.createdAt === record.createdAt) return cache[key].url;
+        if (cache[key]?.url) URL.revokeObjectURL(cache[key].url);
+        const url = URL.createObjectURL(record.blob);
+        cache[key] = { url, createdAt: record.createdAt };
+        return url;
+      } catch {
+        return URL.createObjectURL(record.blob);
+      }
     }
     delete index[cacheKey];
     _saveOfflineCacheIndex(index);

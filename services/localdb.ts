@@ -2,15 +2,33 @@ import { Capacitor } from '@capacitor/core';
 import { webDB, LocalRecord } from './localdb.web';
 import { nativeDB } from './localdb.native';
 
-type ChangeCallback = (tableName: string) => void;
+type ChangeCallback = (tableName: string) => void | Promise<void>;
 const _listeners: Record<string, Set<ChangeCallback>> = {};
+const _pendingNotifications = new Set<string>();
+const _scheduledNotifications = new Set<string>();
 
 const notifyChange = (tableName: string) => {
-  const s = _listeners[tableName];
-  if (!s) return;
-  for (const cb of Array.from(s)) {
-    try { cb(tableName); } catch (e) { console.error('listener error', e); }
-  }
+  _pendingNotifications.add(tableName);
+  if (_scheduledNotifications.has(tableName)) return;
+  _scheduledNotifications.add(tableName);
+  const schedule = typeof queueMicrotask === 'function'
+    ? queueMicrotask
+    : (callback: () => void) => { void Promise.resolve().then(callback); };
+  schedule(() => {
+    _scheduledNotifications.delete(tableName);
+    if (!_pendingNotifications.delete(tableName)) return;
+    const listeners = _listeners[tableName];
+    if (!listeners) return;
+    for (const cb of Array.from(listeners)) {
+      try {
+        Promise.resolve(cb(tableName)).catch((error) => {
+          console.error(`listener error in ${tableName}`, error);
+        });
+      } catch (error) {
+        console.error(`listener error in ${tableName}`, error);
+      }
+    }
+  });
 };
 
 const isNative = Capacitor.isNativePlatform();
@@ -29,9 +47,15 @@ export const localdb = {
     const table = webDB[tableName];
     if (!table) return [];
     const records = await table.toArray();
-    let data = records.map((r: LocalRecord) => r.data);
+    let data = records
+      .map((r: LocalRecord) => r?.data)
+      .filter((value: unknown) => !!value && typeof value === 'object');
     if (orderBy) {
-      data.sort((a: any, b: any) => (a[orderBy] > b[orderBy] ? -1 : 1));
+      data.sort((a: any, b: any) => {
+        const left = String(a?.[orderBy] ?? '');
+        const right = String(b?.[orderBy] ?? '');
+        return right.localeCompare(left);
+      });
     }
     return data;
   },
@@ -74,9 +98,39 @@ export const localdb = {
     notifyChange(tableName);
   },
 
+  async putWithOutbox(tableName: string, record: LocalRecord, item: any): Promise<void> {
+    if (isNative) {
+      await nativeDB.putWithOutbox(tableName, record, item);
+      notifyChange(tableName);
+      return;
+    }
+    // @ts-ignore
+    await webDB.transaction('rw', webDB[tableName], webDB.outbox, async () => {
+      // @ts-ignore
+      await webDB[tableName].put(record);
+      await webDB.outbox.add(item);
+    });
+    notifyChange(tableName);
+  },
+
+  async deleteWithOutbox(tableName: string, id: string, item: any): Promise<void> {
+    if (isNative) {
+      await nativeDB.deleteWithOutbox(tableName, id, item);
+      notifyChange(tableName);
+      return;
+    }
+    // @ts-ignore
+    await webDB.transaction('rw', webDB[tableName], webDB.outbox, async () => {
+      // @ts-ignore
+      await webDB[tableName].delete(id);
+      await webDB.outbox.add(item);
+    });
+    notifyChange(tableName);
+  },
+
   async bulkPut(tableName: string, records: LocalRecord[]): Promise<void> {
     if (isNative) {
-      for (const r of records) await nativeDB.put(tableName, r);
+      await nativeDB.bulkPut(tableName, records);
       notifyChange(tableName);
       return;
     }
@@ -203,5 +257,10 @@ export const localdb = {
     ]);
     const lastError = await webDB.outbox.where('status').equals('error').reverse().first();
     return { total: all, pending, errors, lastError: lastError || null };
+  },
+
+  async getNativeStatus(): Promise<{ available: boolean; error: string | null } | null> {
+    if (!isNative) return null;
+    return nativeDB.getStatus();
   }
 };

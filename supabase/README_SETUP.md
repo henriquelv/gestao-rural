@@ -1,8 +1,8 @@
 # Setup do Supabase (Gestão Rural)
 
-Você me passou:
-- Project ID: lviwvkvkeyzqdcbevaih
-- URL: https://lviwvkvkeyzqdcbevaih.supabase.co
+Projeto atualmente usado pelo app:
+- Project ID: vocnftkhnrfnbfvpnqtb
+- URL: https://vocnftkhnrfnbfvpnqtb.supabase.co
 - Anon key: (está em .env.local)
 
 ## 1) Variáveis de ambiente

@@ -1,12 +1,11 @@
-import React, { useEffect, useState } from 'react';
-import { HashRouter, Routes, Route } from 'react-router-dom';
+import React, { lazy, Suspense, useEffect, useState } from 'react';
+import { HashRouter, Navigate, Routes, Route } from 'react-router-dom';
 import { Capacitor } from '@capacitor/core';
 import { App as CapApp } from '@capacitor/app';
 import { HomeScreen } from './screens/HomeScreen';
 import { PinGuard } from './components/PinGuard';
 import { db } from './services/db.service';
 import { notify } from './services/notification.service';
-import { syncService } from './services/sync.service';
 import { seedImageData } from './services/seed.service';
 import { farmContextService } from './services/farm-context.service';
 import { ActivationScreen } from './screens/ActivationScreen';
@@ -50,10 +49,12 @@ import { ListImprovementsScreen } from './screens/improvements/ListImprovementsS
 import { FarmDataMenuScreen } from './screens/farmdata/FarmDataMenuScreen';
 import { DataMetricScreen } from './screens/farmdata/DataMetricScreen';
 
-// Config
-import { SettingsScreen } from './screens/SettingsScreen';
-import { DiagnosticScreen } from './screens/DiagnosticScreen';
-import { OwnerDashboardScreen } from './screens/OwnerDashboardScreen';
+// Telas administrativas grandes são carregadas apenas quando abertas. Os
+// chunks continuam empacotados no APK e funcionam sem internet.
+const SettingsScreen = lazy(() => import('./screens/SettingsScreen').then((module) => ({ default: module.SettingsScreen })));
+const DiagnosticScreen = lazy(() => import('./screens/DiagnosticScreen').then((module) => ({ default: module.DiagnosticScreen })));
+const OwnerDashboardScreen = lazy(() => import('./screens/OwnerDashboardScreen').then((module) => ({ default: module.OwnerDashboardScreen })));
+import { SwitchEmployeeScreen } from './screens/SwitchEmployeeScreen';
 
 // Dynamic
 import { GenericMenuScreen } from './screens/GenericMenuScreen';
@@ -65,13 +66,21 @@ const App: React.FC = () => {
   const [activated, setActivated] = useState(() => farmContextService.isActivated());
 
   useEffect(() => {
+    const requestReactivation = () => setActivated(false);
+    window.addEventListener('app-reactivation-request', requestReactivation);
+    return () => window.removeEventListener('app-reactivation-request', requestReactivation);
+  }, []);
+
+  useEffect(() => {
     if (!activated) return;
     // O dono não sincroniza dados de fazenda
     if (farmContextService.getContext()?.is_owner) return;
 
     let removeBackButtonListener: (() => void) | undefined;
+    let removeAppStateListener: (() => void) | undefined;
     let syncInterval: any;
     let running = false;
+    let initialReconciliationDone = false;
 
     const persistLastError = (payload: any) => {
       try {
@@ -113,12 +122,12 @@ const App: React.FC = () => {
 
         if (!isHome) {
           // Padrão: voltar apenas 1 nível
+          const beforeHash = window.location.hash;
           window.history.back();
 
           // Se após 500ms ainda estiver na mesma rota, força home (evita loop)
-          const currentHash = window.location.hash;
           setTimeout(() => {
-            if (window.location.hash === currentHash && hash !== currentHash) {
+            if (window.location.hash === beforeHash) {
               window.location.hash = '#/';
             }
           }, 500);
@@ -137,9 +146,6 @@ const App: React.FC = () => {
 
     window.addEventListener('error', onError);
     window.addEventListener('unhandledrejection', onUnhandledRejection);
-
-    // Inicia background sync (a cada 15 minutos mesmo com app em background)
-    syncService.startBackgroundRunner(15);
 
     // Tenta sincronizar ao abrir o app se houver internet
     const runSyncCycle = async () => {
@@ -183,16 +189,28 @@ const App: React.FC = () => {
         window.dispatchEvent(new CustomEvent('app-sync-start', { detail: { label: 'enviando pendentes' } }));
         await db.syncPendingData();
 
-        const FULL_REFRESH_HOTFIX_FLAG = 'full_refresh_after_supabase_switch_v6';
-        if (!localStorage.getItem(FULL_REFRESH_HOTFIX_FLAG)) {
-          console.log('[App] Forçando carga completa segura após envio de pendentes...');
+        const FULL_REFRESH_HOTFIX_FLAG = 'full_refresh_session_reconciliation_v7';
+        let fullRefreshSucceeded = false;
+        // Cada abertura reconcilia o cache uma vez. Isso corrige aparelhos que
+        // ficaram com cursores antigos ou receberam registros retroativos.
+        if (!initialReconciliationDone) {
+          console.log('[App] Reconciliando cache local com o servidor...');
           window.dispatchEvent(new CustomEvent('app-sync-start', { detail: { label: 'carga completa' } }));
-          await db.forceFullRefreshFromServer();
-          localStorage.setItem(FULL_REFRESH_HOTFIX_FLAG, 'true');
+          const fullRefresh = await db.forceFullRefreshFromServer();
+          if (fullRefresh.ok) {
+            initialReconciliationDone = true;
+            fullRefreshSucceeded = true;
+            localStorage.setItem(FULL_REFRESH_HOTFIX_FLAG, 'true');
+          } else {
+            localStorage.removeItem(FULL_REFRESH_HOTFIX_FLAG);
+            console.warn('[App] Reconciliação incompleta; uma nova tentativa será feita.', fullRefresh);
+          }
         }
 
-        window.dispatchEvent(new CustomEvent('app-sync-start', { detail: { label: 'atualizando dados' } }));
-        await db.refreshFromServer();
+        if (!fullRefreshSucceeded) {
+          window.dispatchEvent(new CustomEvent('app-sync-start', { detail: { label: 'atualizando dados' } }));
+          await db.refreshFromServer();
+        }
 
         await db.migrateRaspagemToConforto();
         await seedImageData();
@@ -211,7 +229,7 @@ const App: React.FC = () => {
       if (mediaCacheDone || !navigator.onLine) return;
       mediaCacheDone = true;
       try {
-        await db.preCacheAllMedia();
+        mediaCacheDone = await db.preCacheAllMedia();
       } catch (e) {
         console.error('Erro no cache de mídia:', e);
         mediaCacheDone = false; // permitir retry na próxima vez
@@ -231,9 +249,19 @@ const App: React.FC = () => {
 
     window.addEventListener('online', handleOnline);
 
+    const setupNativeResumeSync = async () => {
+      if (!Capacitor.isNativePlatform()) return;
+      const listener = await CapApp.addListener('appStateChange', ({ isActive }) => {
+        if (!isActive || !navigator.onLine) return;
+        void runSyncCycle().then(runMediaCacheIfNeeded).catch(console.error);
+      });
+      removeAppStateListener = () => listener.remove();
+    };
+    void setupNativeResumeSync();
+
     // Sincroniza a cada 1 minuto se online (em vez de 2 minutos)
     syncInterval = setInterval(() => {
-      if (navigator.onLine) void runSyncCycle();
+      if (navigator.onLine) void runSyncCycle().then(runMediaCacheIfNeeded).catch(console.error);
     }, 60 * 1000);
 
     return () => {
@@ -241,33 +269,51 @@ const App: React.FC = () => {
       window.removeEventListener('error', onError);
       window.removeEventListener('unhandledrejection', onUnhandledRejection);
       if (removeBackButtonListener) removeBackButtonListener();
+      if (removeAppStateListener) removeAppStateListener();
       if (syncInterval) clearInterval(syncInterval);
-      syncService.stopBackgroundRunner();
     };
   }, [activated]);
 
   if (!activated) {
     return (
       <HashRouter>
-        <Routes>
-          <Route path="/diagnostics" element={<DiagnosticScreen />} />
-          <Route path="*" element={
-            <ActivationScreen onActivated={() => {
-              const ctx = farmContextService.getContext();
-              if (ctx?.is_owner) {
-                window.location.hash = '#/owner';
-              }
-              setActivated(true);
-            }} />
-          } />
-        </Routes>
+        <Suspense fallback={<div className="flex min-h-screen items-center justify-center bg-gray-100 font-bold text-gray-600">Carregando...</div>}>
+          <Routes>
+            <Route path="/diagnostics" element={<DiagnosticScreen />} />
+            <Route path="*" element={
+              <ActivationScreen onActivated={() => {
+                const ctx = farmContextService.getContext();
+                if (ctx?.is_owner) {
+                  window.location.hash = '#/owner';
+                }
+                setActivated(true);
+              }} />
+            } />
+          </Routes>
+        </Suspense>
+      </HashRouter>
+    );
+  }
+
+  const currentContext = farmContextService.getContext();
+  if (currentContext?.is_owner) {
+    return (
+      <HashRouter>
+        <Suspense fallback={<div className="flex min-h-screen items-center justify-center bg-gray-100 font-bold text-gray-600">Carregando...</div>}>
+          <Routes>
+            <Route path="/owner" element={<OwnerDashboardScreen />} />
+            <Route path="/diagnostics" element={<DiagnosticScreen />} />
+            <Route path="*" element={<Navigate to="/owner" replace />} />
+          </Routes>
+        </Suspense>
       </HashRouter>
     );
   }
 
   return (
     <HashRouter>
-      <Routes>
+      <Suspense fallback={<div className="flex min-h-screen items-center justify-center bg-gray-100 font-bold text-gray-600">Carregando...</div>}>
+        <Routes>
         {/* --- ROTAS LIVRES (Free Access) --- */}
         <Route path="/" element={<HomeScreen />} />
 
@@ -333,9 +379,12 @@ const App: React.FC = () => {
         {/* Configurações - proteger acesso com PIN */}
         <Route path="/settings" element={<PinGuard title="Configurações"><SettingsScreen /></PinGuard>} />
         <Route path="/diagnostics" element={<DiagnosticScreen />} />
-        <Route path="/owner" element={<OwnerDashboardScreen />} />
+        <Route path="/switch-employee" element={<SwitchEmployeeScreen />} />
+        <Route path="/owner" element={<Navigate to="/" replace />} />
+        <Route path="*" element={<Navigate to="/" replace />} />
 
-      </Routes>
+        </Routes>
+      </Suspense>
     </HashRouter>
   );
 };

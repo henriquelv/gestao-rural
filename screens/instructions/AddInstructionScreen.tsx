@@ -16,6 +16,8 @@ import { PinRequestModal } from '../../components/PinRequestModal';
 import { authService } from '../../services/auth.service';
 import { mediaService } from '../../services/media.service';
 import { farmContextService } from '../../services/farm-context.service';
+import { createId } from '../../utils/id';
+import { localdb } from '../../services/localdb';
 
 export const AddInstructionScreen: React.FC = () => {
   const navigate = useNavigate();
@@ -26,12 +28,12 @@ export const AddInstructionScreen: React.FC = () => {
 
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [employeeName, setEmployeeName] = useState('');
+  const [employeeId, setEmployeeId] = useState('');
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [media, setMedia] = useState<MediaItem[]>([]);
+  const [isSaving, setIsSaving] = useState(false);
   const [showPinModal, setShowPinModal] = useState(false);
-  const selectedEmployee = employees.find(emp => emp.name === employeeName);
-
   useEffect(() => {
     const load = async () => {
       const emps = await db.getEmployees();
@@ -39,8 +41,11 @@ export const AddInstructionScreen: React.FC = () => {
       setEmployees(emps);
       const ctx = farmContextService.getContext();
       if (ctx?.employee_name) setEmployeeName(ctx.employee_name);
+      if (ctx?.employee_id) setEmployeeId(String(ctx.employee_id));
     };
-    load();
+    void load();
+    const unsubscribe = localdb.subscribe('employees', () => { void load(); });
+    return () => unsubscribe();
   }, []);
 
   const handleGalleryPick = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -84,6 +89,7 @@ export const AddInstructionScreen: React.FC = () => {
   };
 
   const handleSave = () => {
+    if (isSaving) return;
     if (!title) { notify('Preencha o Título.', "error"); return; }
 
     if (authService.isAuthenticated()) {
@@ -94,18 +100,27 @@ export const AddInstructionScreen: React.FC = () => {
   };
 
   const performSave = async () => {
-    await db.addInstruction({
-      id: crypto.randomUUID(),
-      createdAt: timestamp,
-      title,
-      sector: selectedSector || 'Geral',
-      description,
-      employee_id: selectedEmployee?.id || farmContextService.getContext()?.employee_id,
-      employee_name: employeeName || farmContextService.getContext()?.employee_name,
-      media
-    });
-    notify('Instrução salva!', "success");
-    navigate('/instructions/list');
+    if (isSaving) return;
+    setIsSaving(true);
+    try {
+      await db.addInstruction({
+        id: createId(),
+        createdAt: timestamp,
+        title,
+        sector: selectedSector || 'Geral',
+        description,
+        employee_id: employeeId || farmContextService.getContext()?.employee_id,
+        employee_name: employeeName || farmContextService.getContext()?.employee_name,
+        media
+      });
+      notify('Instrução salva!', "success");
+      navigate('/instructions/list');
+    } catch (error) {
+      console.error('Erro ao salvar instrução:', error);
+      notify('Não foi possível salvar a instrução. Tente novamente.', 'error');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   return (
@@ -119,8 +134,12 @@ export const AddInstructionScreen: React.FC = () => {
         <EmployeeConfirmField
           label="Funcionário"
           value={employeeName}
+          employeeId={employeeId}
           employees={employees}
-          onChange={setEmployeeName}
+          onChange={(name, selectedEmployeeId) => {
+            setEmployeeName(name);
+            setEmployeeId(selectedEmployeeId);
+          }}
           helpText="Nome que ficará vinculado à instrução criada."
         />
 
@@ -181,15 +200,15 @@ export const AddInstructionScreen: React.FC = () => {
           </div>
         </div>
 
-        <button onClick={handleSave} className="w-full py-4 bg-green-600 text-white font-black text-xl rounded-xl shadow-lg flex items-center justify-center gap-2 mt-2 active:bg-green-700 hover:bg-green-700 transition-colors">
+        <button disabled={isSaving} onClick={handleSave} className="w-full py-4 bg-green-600 text-white font-black text-xl rounded-xl shadow-lg flex items-center justify-center gap-2 mt-2 active:bg-green-700 hover:bg-green-700 transition-colors disabled:opacity-60">
           {!authService.isAuthenticated() && <Lock size={20} className="opacity-75" />}
-          <Save /> SALVAR INSTRUÇÃO
+          <Save /> {isSaving ? 'SALVANDO...' : 'SALVAR INSTRUÇÃO'}
         </button>
       </div>
 
       {showPinModal && (
         <PinRequestModal
-          onSuccess={() => { setShowPinModal(false); performSave(); }}
+          onSuccess={() => { setShowPinModal(false); void performSave(); }}
           onClose={() => setShowPinModal(false)}
           title="Autorização Necessária"
         />

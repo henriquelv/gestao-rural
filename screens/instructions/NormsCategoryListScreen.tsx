@@ -73,7 +73,7 @@ export const NormsCategoryListScreen: React.FC = () => {
           remoteUrl = media.uri || '';
         }
 
-        if (isRemoteHttpUrl(remoteUrl)) {
+        if (navigator.onLine && isRemoteHttpUrl(remoteUrl)) {
           console.log('Download usando URL remota:', remoteUrl);
           await downloadService.downloadFile(remoteUrl, media.name || 'documento', media.mimeType || '', media.localPath);
           return;

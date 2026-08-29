@@ -73,7 +73,7 @@ export const StandardDocScreen: React.FC = () => {
         remoteUrl = downloadUrl;
       }
 
-      if (isRemoteHttpUrl(remoteUrl)) {
+      if (navigator.onLine && isRemoteHttpUrl(remoteUrl)) {
         console.log('Download usando URL remota:', remoteUrl);
         await downloadService.downloadFile(remoteUrl, media.name || 'documento.pdf', media.mimeType || '', media.localPath);
         return;
@@ -121,7 +121,7 @@ export const StandardDocScreen: React.FC = () => {
                       onTouchMove={viewingZoomGestures.handleTouchMove}
                       onTouchEnd={viewingZoomGestures.handleTouchEnd}
                       onError={(e) => {
-                        const next = currentDoc.media.remoteUrl || currentDoc.media.uri || '';
+                        const next = currentDoc.media?.remoteUrl || currentDoc.media?.uri || '';
                         if (next && (e.currentTarget as HTMLImageElement).src !== next) {
                           (e.currentTarget as HTMLImageElement).src = next;
                         }

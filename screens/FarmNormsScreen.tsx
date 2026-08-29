@@ -11,6 +11,8 @@ import { FarmDoc, MediaItem } from '../types';
 import { notify } from '../services/notification.service';
 import { mediaService } from '../services/media.service';
 import { farmContextService } from '../services/farm-context.service';
+import { createId } from '../utils/id';
+import { localdb } from '../services/localdb';
 
 export const FarmNormsScreen: React.FC = () => {
   const navigate = useNavigate();
@@ -23,11 +25,10 @@ export const FarmNormsScreen: React.FC = () => {
 
   const [title, setTitle] = useState('');
   const [responsible, setResponsible] = useState('');
+  const [responsibleEmployeeId, setResponsibleEmployeeId] = useState('');
   const [sector, setSector] = useState<string>('');
   const [docFile, setDocFile] = useState<MediaItem | null>(null);
   const [isSaving, setIsSaving] = useState(false);
-  const selectedEmployee = employees.find(emp => emp.name === responsible);
-
   useEffect(() => { 
       const load = async () => {
           const emps = await db.getEmployees();
@@ -35,11 +36,14 @@ export const FarmNormsScreen: React.FC = () => {
           setEmployees(emps);
           const ctx = farmContextService.getContext();
           if (ctx?.employee_name) setResponsible(ctx.employee_name);
+          if (ctx?.employee_id) setResponsibleEmployeeId(String(ctx.employee_id));
           const s = await db.getSectors();
           setSectors(s);
           if(s.length > 0) setSector(s[0]);
       };
-      load();
+      void load();
+      const unsubscribe = localdb.subscribe('employees', () => { void load(); });
+      return () => unsubscribe();
   }, []);
 
   const appendText = (setter: React.Dispatch<React.SetStateAction<string>>, text: string) => {
@@ -80,11 +84,11 @@ export const FarmNormsScreen: React.FC = () => {
       setIsSaving(true);
       try {
         const newDoc: FarmDoc = {
-            id: crypto.randomUUID(),
+            id: createId(),
             title: title,
             sector: sector,
             responsible: responsible,
-            employee_id: selectedEmployee?.id || farmContextService.getContext()?.employee_id,
+            employee_id: responsibleEmployeeId || farmContextService.getContext()?.employee_id,
             employee_name: responsible || farmContextService.getContext()?.employee_name,
             updatedAt: timestamp, 
             media: docFile
@@ -115,8 +119,12 @@ export const FarmNormsScreen: React.FC = () => {
         <EmployeeConfirmField
           label="Responsável"
           value={responsible}
+          employeeId={responsibleEmployeeId}
           employees={employees}
-          onChange={setResponsible}
+          onChange={(name, employeeId) => {
+            setResponsible(name);
+            setResponsibleEmployeeId(employeeId);
+          }}
           helpText="Nome do responsável pela criação da norma."
         />
 

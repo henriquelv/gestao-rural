@@ -1,27 +1,63 @@
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Filter, X, Image as ImageIcon, Video, Calendar, User, LayoutGrid, List as ListIcon, Table as TableIcon, ArrowUpDown, ArrowUp, ArrowDown, CheckCircle } from 'lucide-react';
+import { Filter, X, Image as ImageIcon, Video, Calendar, User, LayoutGrid, List as ListIcon, Table as TableIcon, ArrowUpDown, ArrowUp, ArrowDown, CheckCircle, AlertTriangle, RefreshCw, FileSpreadsheet } from 'lucide-react';
 import { Layout } from '../components/Layout';
 import { Header } from '../components/Header';
-import { Anomaly } from '../types';
+import { Anomaly, MediaItem } from '../types';
 import { db } from '../services/db.service';
 import { localdb } from '../services/localdb';
 import { notify } from '../services/notification.service';
 import { SECTORS_LIST, SectorType, getSectorColors } from '../constants/sectors';
 import { mediaService } from '../services/media.service';
-import { getAnomalyDate, getAnomalyTime, isAnomalyInDateRange } from '../utils/anomaly-months';
+import { getAnomalyDate, getAnomalyTime, getBusinessDateKey, isAnomalyInDateRange } from '../utils/anomaly-months';
+import { exportCsv } from '../services/export.service';
 
 // Responsáveis são derivados dos dados atuais para manter filtros atualizados
 
 type SortField = 'createdAt' | 'sector' | 'responsible';
 type SortOrder = 'asc' | 'desc';
 type ResolvedStatus = 'all' | 'resolved' | 'unresolved';
+const PAGE_SIZE = 40;
+
+const AnomalyPhoto: React.FC<{ item: MediaItem }> = ({ item }) => {
+  const [url, setUrl] = useState('');
+
+  useEffect(() => {
+    let mounted = true;
+    void mediaService.loadMediaUrl(item)
+      .then((source) => {
+        if (mounted) setUrl(source || mediaService.getUnavailablePlaceholder());
+      })
+      .catch((error) => {
+        console.warn('[AnomalyList] Falha isolada ao carregar miniatura:', error);
+        if (mounted) setUrl(mediaService.getUnavailablePlaceholder());
+      });
+    return () => { mounted = false; };
+  }, [item.id, item.localPath, item.remotePath, item.remoteUrl, item.uri]);
+
+  if (!url) {
+    return <div className="w-full h-full flex items-center justify-center text-gray-300"><ImageIcon size={32} /></div>;
+  }
+
+  return (
+    <img
+      src={url}
+      alt="Foto da anomalia"
+      loading="lazy"
+      className="w-full h-full object-cover"
+      onError={() => setUrl(mediaService.getUnavailablePlaceholder())}
+    />
+  );
+};
 
 export const ListAnomaliesScreen: React.FC = () => {
   const navigate = useNavigate();
   const [items, setItems] = useState<Anomaly[]>([]);
-  const [photoUrls, setPhotoUrls] = useState<Record<string, string>>({});
+  const [loadError, setLoadError] = useState('');
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [visibleLimit, setVisibleLimit] = useState(PAGE_SIZE);
+  const [isExporting, setIsExporting] = useState(false);
   const loadingRef = useRef(false);
   const loadQueuedRef = useRef(false);
   const mountedRef = useRef(false);
@@ -47,7 +83,6 @@ export const ListAnomaliesScreen: React.FC = () => {
   useEffect(() => {
     mountedRef.current = true;
     void loadData();
-    void loadPhotos();
 
     // bulkPut() notifica uma vez por carga. Se outra carga ainda estiver lendo,
     // aguardar a leitura atual evita resultados fora de ordem e renders tardios.
@@ -68,7 +103,13 @@ export const ListAnomaliesScreen: React.FC = () => {
     loadingRef.current = true;
     try {
       const data = await db.getAnomalies();
-      if (mountedRef.current) setItems(Array.isArray(data) ? data : []);
+      if (mountedRef.current) {
+        setItems(Array.isArray(data) ? data : []);
+        setLoadError('');
+      }
+    } catch (error) {
+      console.error('[AnomalyList] Falha ao ler anomalias:', error);
+      if (mountedRef.current) setLoadError('Não foi possível ler os registros neste momento. Seus dados continuam salvos.');
     } finally {
       loadingRef.current = false;
       if (loadQueuedRef.current) {
@@ -78,22 +119,22 @@ export const ListAnomaliesScreen: React.FC = () => {
     }
   };
 
-  const loadPhotos = async () => {
-    const data = await db.getAnomalies();
-    const urls: Record<string, string> = {};
-    for (const item of data) {
-      const media = Array.isArray(item?.media) ? item.media : [];
-      const photo = media.find(m => m?.type === 'photo');
-      if (photo) {
-        const url = await mediaService.loadMediaUrl(photo);
-        if (url) urls[item.id] = url;
-      }
-    }
-    if (mountedRef.current) setPhotoUrls(urls);
-  };
-
   const toggleSectorFilter = (s: SectorType) => {
     setFilterSectors(prev => prev.includes(s) ? prev.filter(i => i !== s) : [...prev, s]);
+  };
+
+  const refreshNow = async () => {
+    if (isRefreshing) return;
+    setIsRefreshing(true);
+    try {
+      const ok = await db.forceRefreshTable('anomalies');
+      await loadData();
+      if (navigator.onLine && !ok && mountedRef.current) {
+        setLoadError('Não foi possível atualizar do servidor. As anomalias salvas neste aparelho continuam visíveis.');
+      }
+    } finally {
+      if (mountedRef.current) setIsRefreshing(false);
+    }
   };
 
   const handleSort = (field: SortField) => {
@@ -162,6 +203,42 @@ export const ListAnomaliesScreen: React.FC = () => {
   }, [items, filterSectors, filterResponsible, filterPeriod, filterResolved, startDate, endDate, sortField, sortOrder]);
 
   const activeFiltersCount = filterSectors.length + (filterResponsible ? 1 : 0) + (filterPeriod !== 'all' ? 1 : 0) + (filterResolved !== 'all' ? 1 : 0);
+  const visibleItems = useMemo(() => filteredItems.slice(0, visibleLimit), [filteredItems, visibleLimit]);
+
+  const exportForExcel = async () => {
+    if (isExporting || filteredItems.length === 0) return;
+    setIsExporting(true);
+    try {
+      const rows = [
+        ['Data', 'Setor', 'O que aconteceu', 'Solução imediata', 'Status'],
+        ...filteredItems.map((item) => [
+          getAnomalyDate(item.createdAt)?.toLocaleDateString('pt-BR') || String(item.createdAt || ''),
+          item.sector || 'Sem setor',
+          item.description || '',
+          item.immediateSolution || '',
+          item.resolvedAt ? 'Resolvida' : 'Pendente'
+        ])
+      ];
+      const dateKey = getBusinessDateKey(new Date());
+      const result = await exportCsv(rows, `anomalias_${dateKey}`);
+      notify(
+        result.native
+          ? `${filteredItems.length} anomalias salvas em Documentos/Gestao Rural/${result.fileName}`
+          : `${filteredItems.length} anomalias exportadas para Excel.`,
+        'success'
+      );
+    } catch (error) {
+      console.error('[AnomalyExport] Falha ao gerar arquivo:', error);
+      notify('Não foi possível exportar as anomalias.', 'error');
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  useEffect(() => {
+    setVisibleLimit(PAGE_SIZE);
+  }, [filterSectors, filterResponsible, filterPeriod, filterResolved, startDate, endDate, sortField, sortOrder, viewMode]);
+
   const clearFilters = () => {
       setFilterSectors([]);
       setFilterResponsible('');
@@ -185,6 +262,26 @@ export const ListAnomaliesScreen: React.FC = () => {
             >
             <Filter size={18} className="mr-2" />
             {activeFiltersCount > 0 ? `Filtros (${activeFiltersCount})` : 'Filtrar'}
+            </button>
+            <button
+              type="button"
+              onClick={() => void exportForExcel()}
+              disabled={isExporting || filteredItems.length === 0}
+              className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg border-2 border-emerald-200 bg-emerald-50 text-emerald-700 disabled:opacity-50"
+              title="Exportar anomalias filtradas para Excel"
+              aria-label="Exportar anomalias para Excel"
+            >
+              <FileSpreadsheet size={19} />
+            </button>
+            <button
+              type="button"
+              onClick={() => void refreshNow()}
+              disabled={isRefreshing}
+              className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg border-2 border-gray-200 bg-white text-gray-700 disabled:opacity-60"
+              title="Atualizar anomalias"
+              aria-label="Atualizar anomalias"
+            >
+              <RefreshCw size={19} className={isRefreshing ? 'animate-spin' : ''} />
             </button>
         </div>
 
@@ -213,8 +310,19 @@ export const ListAnomaliesScreen: React.FC = () => {
 
       {/* CONTENT */}
       <div className="flex-1 overflow-y-auto bg-gray-100 p-3">
+        {loadError && (
+          <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+            <div className="flex items-start gap-2">
+              <AlertTriangle size={18} className="mt-0.5 shrink-0" />
+              <span className="font-semibold">{loadError}</span>
+            </div>
+            <button onClick={() => void loadData()} className="mt-3 inline-flex min-h-10 items-center gap-2 rounded-lg bg-amber-900 px-3 font-bold text-white">
+              <RefreshCw size={16} /> Tentar novamente
+            </button>
+          </div>
+        )}
         <div className="mb-3 rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-bold text-gray-600">
-          Mostrando {filteredItems.length} de {items.length} anomalias
+          Mostrando {visibleItems.length} de {filteredItems.length} anomalias
           {activeFiltersCount > 0 && (
             <button onClick={clearFilters} className="ml-2 font-black text-blue-700 underline">
               limpar filtros
@@ -251,7 +359,7 @@ export const ListAnomaliesScreen: React.FC = () => {
                              </tr>
                          </thead>
                          <tbody>
-                             {filteredItems.map(item => (
+                             {visibleItems.map(item => (
                                  <tr
                                     key={item.id}
                                     onClick={() => navigate(`/anomalies/detail/${item.id}`)}
@@ -278,12 +386,10 @@ export const ListAnomaliesScreen: React.FC = () => {
              </div>
         ) : (
             <div className={viewMode === 'grid' ? 'grid grid-cols-2 gap-3' : 'space-y-3'}>
-                {filteredItems.map((item) => {
+                {visibleItems.map((item) => {
                   const media = Array.isArray(item?.media) ? item.media : [];
                   const photo = media.find(m => m?.type === 'photo');
                   const hasVideo = media.some(m => m?.type === 'video');
-                    const photoUrl = photoUrls[item.id] || (photo ? mediaService.getRemoteUrl(photo) : '');
-
                     return (
                     <div
                         key={item.id}
@@ -301,16 +407,7 @@ export const ListAnomaliesScreen: React.FC = () => {
                         {viewMode === 'grid' && (
                             <div className="h-28 bg-gray-200 w-full relative">
                                 {photo ? (
-                                    <img
-                                      src={photoUrl}
-                                      className="w-full h-full object-cover"
-                                      onError={(e) => {
-                                        const next = photo?.remoteUrl || photo?.uri || '';
-                                        if (next && (e.currentTarget as HTMLImageElement).src !== next) {
-                                          (e.currentTarget as HTMLImageElement).src = next;
-                                        }
-                                      }}
-                                    />
+                                    <AnomalyPhoto item={photo} />
                                 ) : (
                                     <div className="w-full h-full flex items-center justify-center text-gray-300">
                                         <ImageIcon size={32} />
@@ -368,6 +465,16 @@ export const ListAnomaliesScreen: React.FC = () => {
                     );
                 })}
             </div>
+        )}
+
+        {visibleItems.length < filteredItems.length && (
+          <button
+            type="button"
+            onClick={() => setVisibleLimit((current) => current + PAGE_SIZE)}
+            className="mt-4 w-full min-h-12 rounded-lg border border-gray-300 bg-white px-4 text-sm font-black text-gray-800 shadow-sm"
+          >
+            Carregar mais ({filteredItems.length - visibleItems.length} restantes)
+          </button>
         )}
       </div>
 

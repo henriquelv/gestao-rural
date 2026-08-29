@@ -4,7 +4,9 @@ const config: CapacitorConfig = {
   appId: 'com.gestaorural.app',
   appName: 'Gestão Rural',
   webDir: 'dist',
-  bundledWebRuntime: false,
+  android: {
+    minWebViewVersion: 63,
+  },
   server: {
     androidScheme: 'https'
   },

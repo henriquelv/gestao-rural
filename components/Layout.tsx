@@ -2,7 +2,7 @@
 import React, { useEffect, useState } from 'react';
 import { Toast } from './Toast';
 import { ToastType } from '../services/notification.service';
-import { Loader, WifiOff } from 'lucide-react';
+import { AlertTriangle, Loader, RefreshCw, WifiOff } from 'lucide-react';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -12,9 +12,23 @@ interface LayoutProps {
 export const Layout: React.FC<LayoutProps> = ({ children, className = '' }) => {
   const [toast, setToast] = useState<{ message: string; type: ToastType } | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
-  const [lastSync, setLastSync] = useState<string | null>(null);
+  const readLastSync = () => {
+    try {
+      const raw = localStorage.getItem('last_sync_at');
+      if (!raw) return null;
+      const value = new Date(raw);
+      if (Number.isNaN(value.getTime())) return null;
+      return `${value.getHours().toString().padStart(2, '0')}:${value.getMinutes().toString().padStart(2, '0')}`;
+    } catch {
+      return null;
+    }
+  };
+  const [lastSync, setLastSync] = useState<string | null>(() => readLastSync());
   const [isOnline, setIsOnline] = useState(() => navigator.onLine);
   const [syncProgress, setSyncProgress] = useState<string | null>(null);
+  const [accessError, setAccessError] = useState<string | null>(() => {
+    try { return localStorage.getItem('last_access_error_v1'); } catch { return null; }
+  });
 
   useEffect(() => {
     const handleToast = (e: Event) => {
@@ -31,18 +45,23 @@ export const Layout: React.FC<LayoutProps> = ({ children, className = '' }) => {
     const handleSyncEnd = () => {
       setIsSyncing(false);
       setSyncProgress(null);
-      const now = new Date();
-      setLastSync(`${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`);
+      // O ciclo também termina quando falha. Exibir somente o timestamp que o
+      // syncService gravou após sucesso evita informar uma sincronização falsa.
+      setLastSync(readLastSync());
     };
 
     const handleOnline = () => setIsOnline(true);
     const handleOffline = () => setIsOnline(false);
+    const handleAccessStatus = (event: Event) => {
+      setAccessError((event as CustomEvent).detail?.message || null);
+    };
 
     window.addEventListener('app-toast', handleToast);
     window.addEventListener('app-sync-start', handleSyncStart);
     window.addEventListener('app-sync-end', handleSyncEnd);
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
+    window.addEventListener('app-access-status', handleAccessStatus);
 
     return () => {
       window.removeEventListener('app-toast', handleToast);
@@ -50,6 +69,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, className = '' }) => {
       window.removeEventListener('app-sync-end', handleSyncEnd);
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
+      window.removeEventListener('app-access-status', handleAccessStatus);
     };
   }, []);
 
@@ -64,6 +84,22 @@ export const Layout: React.FC<LayoutProps> = ({ children, className = '' }) => {
           <div className="bg-red-600 px-4 py-2 flex items-center justify-center gap-2 text-white text-sm font-bold">
             <WifiOff size={16} />
             <span>SEM CONEXÃO — dados salvos localmente</span>
+          </div>
+        )}
+
+        {isOnline && accessError && (
+          <div className="border-b border-red-300 bg-red-50 px-3 py-2 text-red-900">
+            <div className="flex items-start gap-2 text-xs font-bold">
+              <AlertTriangle size={16} className="mt-0.5 shrink-0" />
+              <span className="min-w-0 flex-1">{accessError}</span>
+              <button
+                type="button"
+                onClick={() => window.dispatchEvent(new CustomEvent('app-reactivation-request'))}
+                className="inline-flex min-h-9 shrink-0 items-center gap-1 rounded-md bg-red-700 px-2 text-white"
+              >
+                <RefreshCw size={14} /> Reativar
+              </button>
+            </div>
           </div>
         )}
 

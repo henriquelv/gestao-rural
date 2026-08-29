@@ -35,19 +35,21 @@ export const deviceService = {
 
     if (countError) throw countError;
 
-    const { data: existing } = await supabase
+    const { data: existing, error: existingError } = await supabase
       .from('devices')
       .select('*')
       .eq('farm_id', farm.id)
       .eq('device_id', deviceId)
       .maybeSingle();
 
+    if (existingError) throw existingError;
+
     if (!existing && typeof count === 'number' && farm.max_devices && count >= farm.max_devices) {
       throw new Error('Limite de dispositivos atingido para esta fazenda.');
     }
 
     if (existing?.status && existing.status !== 'active') {
-      throw new Error('Este dispositivo esta bloqueado.');
+      throw new Error('Acesso não autorizado: este dispositivo está bloqueado. Procure o administrador.');
     }
 
     const payload = {
@@ -83,5 +85,27 @@ export const deviceService = {
       .maybeSingle();
     if (error) throw error;
     return data as DeviceRegistration | null;
+  },
+
+  async assignCurrentEmployee(employeeId: string): Promise<DeviceRegistration> {
+    const ctx = farmContextService.getContext();
+    if (!ctx || ctx.is_owner) {
+      throw new Error('Acesso não autorizado: aplicativo não ativado para uma fazenda.');
+    }
+
+    const { data, error } = await supabase
+      .from('devices')
+      .update({ employee_id: String(employeeId), last_seen_at: new Date().toISOString() })
+      .eq('farm_id', ctx.farm_id)
+      .eq('device_id', ctx.device_id)
+      .eq('status', 'active')
+      .select('*')
+      .maybeSingle();
+
+    if (error) throw error;
+    if (!data) {
+      throw new Error('Acesso não autorizado: dispositivo não encontrado ou bloqueado.');
+    }
+    return data as DeviceRegistration;
   }
 };

@@ -1,8 +1,10 @@
 import React, { useState } from 'react';
-import { CheckCircle2, KeyRound, Loader2, ShieldCheck, Smartphone, UserRound } from 'lucide-react';
+import { AlertCircle, CheckCircle2, KeyRound, Loader2, ShieldCheck, Smartphone, UserRound } from 'lucide-react';
 import { Employee, Farm } from '../types';
 import { activationService } from '../services/activation.service';
 import { notify } from '../services/notification.service';
+import { getUserFacingError } from '../utils/user-error';
+import { formatEmployeeSelectionLabel } from '../utils/employee-selection';
 
 interface Props {
   onActivated: () => void;
@@ -15,9 +17,11 @@ export const ActivationScreen: React.FC<Props> = ({ onActivated }) => {
   const [selectedEmployeeId, setSelectedEmployeeId] = useState('');
   const [isOwner, setIsOwner] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState('');
 
   const validateCode = async () => {
     if (loading) return;
+    setErrorMessage('');
     setLoading(true);
     try {
       const result = await activationService.validateActivationCode(code);
@@ -31,7 +35,9 @@ export const ActivationScreen: React.FC<Props> = ({ onActivated }) => {
         notify('Fazenda validada.', 'success');
       }
     } catch (e: any) {
-      notify(e?.message || 'Erro ao validar codigo.', 'error');
+      const message = getUserFacingError(e, 'Não foi possível validar o código da fazenda.');
+      setErrorMessage(message);
+      notify(message, 'error');
     } finally {
       setLoading(false);
     }
@@ -46,12 +52,15 @@ export const ActivationScreen: React.FC<Props> = ({ onActivated }) => {
     }
 
     setLoading(true);
+    setErrorMessage('');
     try {
-      await activationService.activate(farm, employee);
+      await activationService.activate(farm, employee, employees);
       notify('Aplicativo ativado.', 'success');
       onActivated();
     } catch (e: any) {
-      notify(e?.message || 'Erro ao ativar dispositivo.', 'error');
+      const message = getUserFacingError(e, 'Não foi possível ativar este dispositivo.');
+      setErrorMessage(message);
+      notify(message, 'error');
     } finally {
       setLoading(false);
     }
@@ -86,6 +95,19 @@ export const ActivationScreen: React.FC<Props> = ({ onActivated }) => {
         </div>
 
         <div className="flex-1 p-6 space-y-5">
+          {errorMessage && (
+            <div role="alert" className="flex items-start gap-3 rounded-lg border border-red-200 bg-red-50 p-4 text-red-800">
+              <AlertCircle size={22} className="shrink-0" />
+              <div>
+                <p className="text-xs font-black uppercase">
+                  {errorMessage.toLowerCase().includes('não autorizado') || errorMessage.toLowerCase().includes('bloquead')
+                    ? 'Acesso não autorizado'
+                    : 'Não foi possível continuar'}
+                </p>
+                <p className="mt-1 text-sm font-semibold">{errorMessage}</p>
+              </div>
+            </div>
+          )}
           <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
             <label className="text-xs font-black text-gray-500 uppercase block mb-2">Codigo da fazenda</label>
             <div className="flex gap-2">
@@ -152,7 +174,9 @@ export const ActivationScreen: React.FC<Props> = ({ onActivated }) => {
                   className="w-full p-4 rounded-xl border-2 border-gray-200 bg-white font-bold text-gray-800 outline-none focus:border-green-600"
                 >
                   {employees.map((employee) => (
-                    <option key={employee.id} value={employee.id}>{employee.name}</option>
+                    <option key={employee.id} value={employee.id}>
+                      {formatEmployeeSelectionLabel(employee, employees)}
+                    </option>
                   ))}
                 </select>
               </div>

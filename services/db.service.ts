@@ -8,6 +8,19 @@ import { mediaService } from './media.service';
 import { farmContextService } from './farm-context.service';
 import { normalizeAnomalies, normalizeAnomaly } from '../utils/anomaly-normalize';
 import { getAnomalyDateParts } from '../utils/anomaly-months';
+import {
+  normalizeDailyMetric,
+  normalizeDailyMilk,
+  normalizeEmployees,
+  normalizeFarmDoc,
+  normalizeImprovement,
+  normalizeInstruction,
+  normalizeMonthlyStats,
+  normalizeNotice,
+  normalizeUIConfig
+} from '../utils/record-normalize';
+import { getLocalRecordId, getProtectedLocalRecordIds } from '../utils/local-record-id';
+import { getMaxRefreshCursor, getServerOrderFields, ORPHAN_RECOVERY_TABLES } from '../utils/sync-table-config';
 
 const isOnline = () => navigator.onLine;
 const nowISO = () => new Date().toISOString();
@@ -61,13 +74,7 @@ const clearLastRefresh = (tableName: string) => {
 };
 
 const getTimestampFieldForTable = (tableName: string): string | null => {
-  // createdAt is a business date, not a sync cursor. A full paginated fetch
-  // also recovers records imported later with an older createdAt.
-  if (tableName === 'anomalies') return null;
-  if (tableName === 'instructions') return 'createdAt';
-  if (tableName === 'notices') return 'createdAt';
-  if (tableName === 'improvements') return 'createdAt';
-  if (tableName === 'farm_docs') return 'updatedAt';
+  if (['anomalies', 'instructions', 'notices', 'improvements', 'farm_docs'].includes(tableName)) return 'updated_at';
   // daily_metrics, milk_daily e farm_monthly_stats usam 'date'/'monthKey' como chave
   // de negócio, não como timestamp de modificação. Delta sync por esse campo faz com que
   // edições em datas retroativas nunca cheguem em outros dispositivos. Fazemos fetch
@@ -111,35 +118,28 @@ const metadataTables = new Set([
 ]);
 const smartReadHydratedKeys = new Set<string>();
 const refreshInFlight = new Map<string, Promise<boolean>>();
+const legacyTimestampFields = new Map<string, string>();
+const legacyFullRefreshAt = new Map<string, number>();
+const LEGACY_FULL_REFRESH_INTERVAL_MS = 15 * 60 * 1000;
 
-const localRecordId = (tableName: string, row: any) => {
-  const asString = (value: any) => value === undefined || value === null ? '' : String(value);
-  if (tableName === 'ui_config' || tableName === 'farm_settings' || tableName === 'settings') {
-    const id = row.id ?? '1';
-    return row.farm_id ? `${row.farm_id}_${id}` : asString(id);
-  }
-  if (tableName === 'sectors') {
-    const name = row.name ?? row.id;
-    return row.farm_id ? `${row.farm_id}_${name}` : asString(name);
-  }
-  if (tableName === 'daily_metrics') {
-    const fid = row.farm_id ? `${row.farm_id}_` : '';
-    return asString(`${fid}${row.date}_${row.type}`);
-  }
-  if (tableName === 'milk_daily') {
-    return row.farm_id ? `${row.farm_id}_${row.date}` : asString(row.id ?? row.date);
-  }
-  if (tableName === 'farm_monthly_stats') {
-    return row.farm_id ? `${row.farm_id}_${row.monthKey}` : asString(row.id ?? row.monthKey);
-  }
-  return asString(row.id ?? row.date ?? row.name);
+const getLegacyTimestampField = (tableName: string): string | null => {
+  if (tableName === 'farm_docs') return 'updatedAt';
+  if (['anomalies', 'instructions', 'notices', 'improvements'].includes(tableName)) return 'createdAt';
+  return null;
 };
+
+const localRecordId = getLocalRecordId;
 
 const filterByCurrentFarm = <T>(tableName: string, rows: T[]): T[] => {
   const currentFarmId = farmContextService.getFarmId();
-  if (!currentFarmId || !farmScopedTables.has(tableName)) return rows;
-  // Aceita registros sem farm_id (legado anterior à coluna) E da fazenda atual
-  return rows.filter((row: any) => !row?.farm_id || row.farm_id === currentFarmId);
+  if (!farmScopedTables.has(tableName)) return rows;
+  if (!currentFarmId) return configOnlyTables.has(tableName) ? rows : [];
+  if (configOnlyTables.has(tableName)) {
+    const matching = rows.filter((row: any) => row?.farm_id === currentFarmId);
+    const global = rows.filter((row: any) => !row?.farm_id);
+    return [...matching, ...global];
+  }
+  return rows.filter((row: any) => row?.farm_id === currentFarmId);
 };
 
 // Cache de URLs públicas de mídia: evita recalcular a URL a cada sync/leitura
@@ -159,8 +159,9 @@ const normalizeRemoteUrls = (tableName: string, row: any) => {
     // farm_docs has single media object
     if (tableName === 'farm_docs') {
       const m = row?.media;
-      if (m && !m.remoteUrl && m.remotePath) {
-        return { ...row, media: { ...m, remoteUrl: getCachedPublicUrl(m.remotePath) } };
+      if (m?.remotePath) {
+        const remoteUrl = getCachedPublicUrl(m.remotePath);
+        return remoteUrl ? { ...row, media: { ...m, remoteUrl } } : row;
       }
       return row;
     }
@@ -168,8 +169,9 @@ const normalizeRemoteUrls = (tableName: string, row: any) => {
     const arr = Array.isArray(row?.media) ? row.media : [];
     if (arr.length === 0) return { ...row, media: [] };
     const next = arr.map((m: any) => {
-      if (m && !m.remoteUrl && m.remotePath) {
-        return { ...m, remoteUrl: getCachedPublicUrl(m.remotePath) };
+      if (m?.remotePath) {
+        const remoteUrl = getCachedPublicUrl(m.remotePath);
+        return remoteUrl ? { ...m, remoteUrl } : m;
       }
       return m;
     });
@@ -177,6 +179,19 @@ const normalizeRemoteUrls = (tableName: string, row: any) => {
   } catch {
     return row;
   }
+};
+
+const normalizeTableRow = (tableName: string, row: unknown): any | null => {
+  const withMediaUrl = normalizeRemoteUrls(tableName, row);
+  if (tableName === 'anomalies') return normalizeAnomaly(withMediaUrl);
+  if (tableName === 'instructions') return normalizeInstruction(withMediaUrl);
+  if (tableName === 'notices') return normalizeNotice(withMediaUrl);
+  if (tableName === 'improvements') return normalizeImprovement(withMediaUrl);
+  if (tableName === 'farm_docs') return normalizeFarmDoc(withMediaUrl);
+  if (tableName === 'milk_daily') return normalizeDailyMilk(withMediaUrl);
+  if (tableName === 'daily_metrics') return normalizeDailyMetric(withMediaUrl);
+  if (tableName === 'farm_monthly_stats') return normalizeMonthlyStats(withMediaUrl);
+  return withMediaUrl && typeof withMediaUrl === 'object' ? withMediaUrl : null;
 };
 
 export interface AnomalyAudit {
@@ -272,59 +287,28 @@ const DEFAULT_UI_BUTTONS: UIBlock[] = [
 const DEFAULT_UI_CONFIG: UIConfig = { buttons: DEFAULT_UI_BUTTONS, customPages: [] };
 const DEFAULT_SECTORS_LIST = Object.values(Sector);
 
-const DEFAULT_EMPLOYEES_LIST: Employee[] = [
-  { id: '1', name: 'ADILSON', role: 'Colaborador' },
-  { id: '2', name: 'ADOIR', role: 'Colaborador' },
-  { id: '3', name: 'ADRIANA', role: 'Colaborador' },
-  { id: '4', name: 'ALINE', role: 'Colaborador' },
-  { id: '5', name: 'ANTONIO', role: 'Colaborador' },
-  { id: '6', name: 'APARECIDO', role: 'Colaborador' },
-  { id: '7', name: 'ARIADNE', role: 'Colaborador' },
-  { id: '8', name: 'BETO', role: 'Colaborador' },
-  { id: '9', name: 'BIGU', role: 'Colaborador' },
-  { id: '10', name: 'CLAUBER', role: 'Colaborador' },
-  { id: '11', name: 'CLENILDO', role: 'Colaborador' },
-  { id: '12', name: 'EDUARDO', role: 'Colaborador' },
-  { id: '13', name: 'EDUARDO 2', role: 'Colaborador' },
-  { id: '14', name: 'ELIAS', role: 'Colaborador' },
-  { id: '15', name: 'ELIAS S', role: 'Colaborador' },
-  { id: '16', name: 'EVA', role: 'Colaborador' },
-  { id: '17', name: 'GIDELSON', role: 'Colaborador' },
-  { id: '18', name: 'ISABELLI', role: 'Colaborador' },
-  { id: '19', name: 'JANETE', role: 'Colaborador' },
-  { id: '20', name: 'JOÃO', role: 'Colaborador' },
-  { id: '21', name: 'JORGE', role: 'Colaborador' },
-  { id: '22', name: 'JOSI', role: 'Colaborador' },
-  { id: '23', name: 'JUAREZ', role: 'Colaborador' },
-  { id: '24', name: 'LENICE', role: 'Colaborador' },
-  { id: '25', name: 'LUIZ', role: 'Colaborador' },
-  { id: '26', name: 'MARIA', role: 'Colaborador' },
-  { id: '27', name: 'MARIO', role: 'Colaborador' },
-  { id: '28', name: 'RAIMUNDA', role: 'Colaborador' },
-  { id: '29', name: 'ROSE', role: 'Colaborador' },
-  { id: '30', name: 'ROY', role: 'Colaborador' },
-  { id: '31', name: 'SANDRO', role: 'Colaborador' },
-  { id: '32', name: 'SARA', role: 'Colaborador' },
-  { id: '33', name: 'SOLANGE', role: 'Colaborador' },
-  { id: '34', name: 'TAINÁ', role: 'Colaborador' },
-  { id: '35', name: 'THALIA', role: 'Colaborador' },
-  { id: '36', name: 'VANDERLEI', role: 'Colaborador' },
-  { id: '37', name: 'VANDERSON', role: 'Colaborador' },
-  { id: '38', name: 'VANESSA', role: 'Colaborador' },
-  { id: '39', name: 'WALLACE', role: 'Colaborador' }
-];
-
 async function refreshFromServer(tableName: string): Promise<boolean> {
-  const running = refreshInFlight.get(tableName);
+  const refreshKey = `${getRefreshScope()}|${tableName}`;
+  const running = refreshInFlight.get(refreshKey);
   if (running) return running;
 
   const promise = refreshFromServerImpl(tableName);
-  refreshInFlight.set(tableName, promise);
+  refreshInFlight.set(refreshKey, promise);
   try {
     return await promise;
   } finally {
-    if (refreshInFlight.get(tableName) === promise) refreshInFlight.delete(tableName);
+    if (refreshInFlight.get(refreshKey) === promise) refreshInFlight.delete(refreshKey);
   }
+}
+
+async function forceRefreshFromServer(tableName: string): Promise<boolean> {
+  const refreshKey = `${getRefreshScope()}|${tableName}`;
+  const running = refreshInFlight.get(refreshKey);
+  if (running) {
+    try { await running; } catch { /* a carga completa abaixo fará a nova tentativa */ }
+  }
+  clearLastRefresh(tableName);
+  return refreshFromServer(tableName);
 }
 
 async function refreshFromServerImpl(tableName: string): Promise<boolean> {
@@ -332,9 +316,15 @@ async function refreshFromServerImpl(tableName: string): Promise<boolean> {
 
   resetRefreshMarkersForScopeChange();
 
-  const last = getLastRefresh(tableName);
-  const tsField = getTimestampFieldForTable(tableName);
+  const desiredTimestampField = getTimestampFieldForTable(tableName);
+  const legacyTimestampField = legacyTimestampFields.get(tableName) || null;
+  const legacyRefreshKey = `${getRefreshScope()}|${tableName}`;
+  const legacyFullRefreshDue = !!legacyTimestampField
+    && Date.now() - (legacyFullRefreshAt.get(legacyRefreshKey) || 0) >= LEGACY_FULL_REFRESH_INTERVAL_MS;
+  const last = legacyFullRefreshDue ? '' : getLastRefresh(tableName);
+  const tsField = legacyTimestampField || desiredTimestampField;
   const currentFarmId = farmContextService.getFarmId();
+  if (farmScopedTables.has(tableName) && !currentFarmId && !configOnlyTables.has(tableName)) return false;
   const makeBaseQuery = (includeFarmFilter = true) => {
     let q = supabase.from(tableName).select('*');
     if (includeFarmFilter && currentFarmId && farmScopedTables.has(tableName)) {
@@ -342,64 +332,106 @@ async function refreshFromServerImpl(tableName: string): Promise<boolean> {
     }
     return q;
   };
+  const orderQuery = (query: any, fields: string[]) => fields.reduce(
+    (ordered, field) => ordered.order(field as any, { ascending: true }),
+    query
+  );
+
+  const fetchPages = async (queryFactory: () => any): Promise<any[] | null> => {
+    const pageSize = 500;
+    const allRows: any[] = [];
+    for (let page = 0; ; page++) {
+      const from = page * pageSize;
+      const { data: pageData, error } = await (queryFactory()
+        .range(from, from + pageSize - 1) as any);
+      if (error || !pageData) {
+        const detail = {
+          tableName,
+          code: error?.code,
+          message: error?.message || 'Resposta sem dados',
+          details: error?.details,
+          hint: error?.hint
+        };
+        console.error(`[Refresh] Falha ao baixar ${tableName}:`, detail);
+        syncService.log('Falha ao baixar tabela', detail);
+        const message = String(error?.message || '').toLowerCase();
+        const fallbackField = getLegacyTimestampField(tableName);
+        if (fallbackField && error?.code === '42703' && message.includes('updated_at')) {
+          legacyTimestampFields.set(tableName, fallbackField);
+          console.warn(`[Refresh] ${tableName} ainda sem updated_at; usando ${fallbackField} com carga completa periódica.`);
+        }
+        return null;
+      }
+      allRows.push(...pageData);
+      if (pageData.length < pageSize) break;
+    }
+    return allRows;
+  };
 
   const runQuery = async (): Promise<any[] | null> => {
     try {
-      const baseQuery = makeBaseQuery(true);
-      if (tableName === 'anomalies') {
-        const pageSize = 500;
-        const allRows: any[] = [];
-        for (let page = 0; ; page++) {
-          const from = page * pageSize;
-          const { data, error } = await (makeBaseQuery(true)
-            .order('id', { ascending: true })
-            .range(from, from + pageSize - 1) as any);
-          if (error || !data) return null;
-          allRows.push(...data);
-          if (data.length < pageSize) break;
-        }
-        return allRows;
-      }
       if (last && tsField) {
-        const { data, error } = await (baseQuery
-          .gte(tsField as any, last)
-          .order(tsField as any, { ascending: true }) as any);
-        if (error || !data) return null;
-        return data;
+        return fetchPages(() => orderQuery(
+          makeBaseQuery(true).gte(tsField as any, last),
+          getServerOrderFields(tableName, tsField)
+        ));
       }
-
-      const { data, error } = await baseQuery;
-      if (error || !data) return null;
-      return data;
-    } catch {
+      if (tsField) {
+        return fetchPages(() => orderQuery(
+          makeBaseQuery(true),
+          getServerOrderFields(tableName, tsField)
+        ));
+      }
+      return fetchPages(() => orderQuery(makeBaseQuery(true), getServerOrderFields(tableName)));
+    } catch (error) {
+      syncService.log('Excecao ao baixar tabela', { tableName, message: error instanceof Error ? error.message : String(error) });
       return null;
     }
   };
 
   let data = await runQuery();
-  // Se falhou (ex: coluna farm_id nao existe no schema legado), tenta sem o filtro
-  if (!data) {
+  // Compatibilidade explícita apenas para configurações em schemas sem farm_id.
+  // Dados operacionais nunca fazem fallback sem escopo, nem quando retornam zero.
+  if (!data && configOnlyTables.has(tableName)) {
+      try {
+        const { data: allData, error: allErr } = await makeBaseQuery(false);
+        if (!allErr && allData) data = allData;
+      } catch {
+        // ignore
+      }
+    }
+
+  // APKs podem chegar antes da migration de updated_at. Nesse caso fazemos
+  // fetch completo ainda escopado à fazenda, sem mascarar outros erros.
+  if (!data && desiredTimestampField) {
     try {
-      const { data: allData, error: allErr } = await makeBaseQuery(false);
-      if (!allErr && allData) data = allData;
+      const legacyData = await fetchPages(() => orderQuery(makeBaseQuery(true), getServerOrderFields(tableName)));
+      if (legacyData) {
+        data = legacyData;
+        if (legacyTimestampFields.has(tableName)) legacyFullRefreshAt.set(legacyRefreshKey, Date.now());
+      }
+      else return false;
     } catch {
-      // ignore
+      return false;
     }
   }
 
   if (!data) return false;
 
-  data = data
-    .map((d: any) => normalizeRemoteUrls(tableName, d))
-    .map((d: any) => tableName === 'anomalies' ? normalizeAnomaly(d) : d)
-    .filter(Boolean);
+  if (legacyTimestampField && !last) {
+    legacyFullRefreshAt.set(legacyRefreshKey, Date.now());
+  }
 
-  const records = data.map((d: any) => ({
-    id: localRecordId(tableName, d),
-    data: d,
-    updated_at: nowISO(),
-    synced: true
-  }));
+  data = data.map((d: any) => normalizeTableRow(tableName, d)).filter(Boolean);
+
+  const records = data
+    .map((d: any) => ({
+      id: localRecordId(tableName, d),
+      data: d,
+      updated_at: nowISO(),
+      synced: true
+    }))
+    .filter((record) => !!record.id);
 
   // Detecção de conflito: se um registro local não sincronizado existe, ele
   // ganha do servidor nesta rodada. O outbox precisa preservar a alteração local.
@@ -407,9 +439,21 @@ async function refreshFromServerImpl(tableName: string): Promise<boolean> {
   let preservedLocalChanges = 0;
   try {
     const conflictTables = new Set(['daily_metrics', 'milk_daily', 'anomalies']);
+    const [unsyncedRecords, pendingOutbox, errorOutbox] = await Promise.all([
+      localdb.getUnsyncedRawRecords(tableName),
+      localdb.getPendingOutbox(),
+      localdb.getOutboxErrors(10000)
+    ]);
+    // Uma exclusao local remove o registro antes de enviar o outbox. Enquanto o
+    // DELETE estiver pendente/errado, nao deixe a carga remota ressuscita-lo.
+    const protectedLocalIds = getProtectedLocalRecordIds(
+      tableName,
+      unsyncedRecords,
+      [...pendingOutbox, ...errorOutbox]
+    );
+
     for (const record of records) {
-      const raw = await localdb.getRawById(tableName, record.id);
-      if (raw && raw.synced === false) {
+      if (protectedLocalIds.has(record.id)) {
         preservedLocalChanges++;
         if (conflictTables.has(tableName) && preservedLocalChanges === 1) {
           console.warn(`Conflito detectado em ${tableName}/${record.id}: dado local não sincronizado foi preservado.`);
@@ -419,9 +463,11 @@ async function refreshFromServerImpl(tableName: string): Promise<boolean> {
       }
       recordsToPut.push(record);
     }
-  } catch {
-    // Não bloquear sync por erro na detecção de conflito.
-    recordsToPut.push(...records);
+  } catch (error) {
+    // Sem conhecer pendencias e exclusoes locais, nao aplique a resposta remota.
+    // A proxima rodada tenta novamente sem sobrescrever nem ressuscitar registros.
+    console.warn(`[Refresh] Nao foi possivel proteger alteracoes locais de ${tableName}.`, error);
+    return false;
   }
 
   if (recordsToPut.length > 0) {
@@ -459,18 +505,18 @@ async function refreshFromServerImpl(tableName: string): Promise<boolean> {
 
   try {
     if (tsField) {
-      const maxTs = data
-        .map((d: any) => (d ? d[tsField] : ''))
-        .filter((v: any) => typeof v === 'string' && v.length > 0)
-        .sort()
-        .slice(-1)[0];
+      // A tentativa de updated_at pode ter descoberto um schema legado durante
+      // esta mesma execução. Nesse caso o cursor correto é createdAt/updatedAt.
+      const effectiveTimestampField = legacyTimestampFields.get(tableName) || tsField;
+      const maxTs = getMaxRefreshCursor(data, effectiveTimestampField);
       if (maxTs) setLastRefresh(tableName, maxTs);
-      else setLastRefresh(tableName, nowISO());
+      // Uma página vazia preserva o cursor anterior. Avançar para Date.now()
+      // faria registros com data de negócio ficarem invisíveis.
     } else {
       setLastRefresh(tableName, nowISO());
     }
   } catch {
-    setLastRefresh(tableName, nowISO());
+    // Falha ao calcular cursor não pode avançar o marcador nem perder registros.
   }
   return true;
 }
@@ -478,9 +524,26 @@ async function refreshFromServerImpl(tableName: string): Promise<boolean> {
 async function smartRead<T>(tableName: string, fallbackData: T[], orderByField?: string): Promise<T[]> {
   try {
     const currentFarmId = farmContextService.getFarmId();
+    const offlineAtStart = !isOnline();
+    if (farmScopedTables.has(tableName) && !currentFarmId && !configOnlyTables.has(tableName)) return [];
     const readLocal = async () => filterByCurrentFarm(tableName, await localdb.getAll<T>(tableName, orderByField));
     let localData = await readLocal();
+    let serverRefreshAttempted = false;
     const hydrationKey = `${getRefreshScope()}|${tableName}`;
+
+    // Configuração visual precisa abrir mesmo em uma instalação sem cache e com
+    // rede instável. Somente tabelas de configuração recebem este padrão local;
+    // dados operacionais nunca são inventados.
+    if (localData.length === 0 && fallbackData.length > 0 && configOnlyTables.has(tableName)) {
+      const seeds = (fallbackData as any[]).map((d: any) => ({
+        id: localRecordId(tableName, d),
+        data: d,
+        updated_at: nowISO(),
+        synced: true
+      }));
+      await localdb.bulkPut(tableName, seeds);
+      localData = await readLocal();
+    }
 
     // Na primeira leitura online por tabela nesta sessão, sincroniza com o servidor.
     // Se há dados locais: retorna imediatamente e atualiza em background (stale-while-revalidate).
@@ -491,40 +554,36 @@ async function smartRead<T>(tableName: string, fallbackData: T[], orderByField?:
       && !smartReadHydratedKeys.has(hydrationKey);
 
     if (needsServerSync) {
-      smartReadHydratedKeys.add(hydrationKey); // marca antes do async para evitar dupla chamada
       clearLastRefresh(tableName);
       if (localData.length === 0) {
         // Sem cache: bloqueia e espera servidor para não renderizar vazio
-        await refreshFromServer(tableName);
+        serverRefreshAttempted = true;
+        const refreshed = await refreshFromServer(tableName);
+        if (refreshed) smartReadHydratedKeys.add(hydrationKey);
         localData = await readLocal();
       } else {
         // Cache existe: retorna dados locais imediatamente, atualiza em background.
         // O subscriber das telas é notificado via notifyChange quando o bulkPut completar.
-        void refreshFromServer(tableName).catch(e => console.error(`[smartRead] bg refresh ${tableName}:`, e));
+        void refreshFromServer(tableName)
+          .then((refreshed) => {
+            if (refreshed) smartReadHydratedKeys.add(hydrationKey);
+          })
+          .catch(e => console.error(`[smartRead] bg refresh ${tableName}:`, e));
       }
     }
 
     if (localData.length === 0) {
       if (isOnline()) {
-        let q = supabase.from(tableName).select('*');
-        if (currentFarmId && farmScopedTables.has(tableName)) {
-          q = q.eq('farm_id', currentFarmId);
+        // Toda leitura remota passa pela mesma paginação e proteção de conflitos.
+        // A consulta direta anterior era limitada pelo máximo padrão do Supabase
+        // e poderia exibir apenas os primeiros 1.000 registros no cache vazio.
+        if (!serverRefreshAttempted) {
+          serverRefreshAttempted = true;
+          const refreshed = await refreshFromServer(tableName);
+          if (refreshed) smartReadHydratedKeys.add(hydrationKey);
         }
-        let { data, error } = await q;
-        // Fallback: se coluna farm_id nao existe no schema, tenta sem filtro
-        if ((error || !data || data.length === 0) && currentFarmId && farmScopedTables.has(tableName)) {
-          const fb = await supabase.from(tableName).select('*');
-          if (!fb.error && fb.data) { data = fb.data; error = null; }
-        }
-        if (!error && data && data.length > 0) {
-          const records = data.map((d: any) => ({
-            id: localRecordId(tableName, d),
-            data: d,
-            updated_at: nowISO(),
-            synced: true
-          }));
-          await localdb.bulkPut(tableName, records);
-        } else if (fallbackData.length > 0) {
+        localData = await readLocal();
+        if (localData.length === 0 && fallbackData.length > 0 && tableName !== 'employees') {
           const seeds = (fallbackData as any[]).map((d: any) => ({
             id: localRecordId(tableName, d),
             data: d,
@@ -533,7 +592,7 @@ async function smartRead<T>(tableName: string, fallbackData: T[], orderByField?:
           }));
           await localdb.bulkPut(tableName, seeds);
         }
-      } else if (fallbackData.length > 0) {
+      } else if (fallbackData.length > 0 && tableName !== 'employees') {
         const seeds = (fallbackData as any[]).map((d: any) => ({
           id: localRecordId(tableName, d),
           data: d,
@@ -545,7 +604,8 @@ async function smartRead<T>(tableName: string, fallbackData: T[], orderByField?:
       localData = await readLocal();
     }
 
-    return localData;
+    const result = localData.length === 0 && offlineAtStart ? fallbackData : localData;
+    return result.map((row) => normalizeRemoteUrls(tableName, row)) as T[];
   } catch (e) {
     console.error(`Erro smartRead ${tableName}:`, e);
     return fallbackData;
@@ -561,6 +621,9 @@ async function smartWrite(
 ) {
   const currentFarmId = farmContextService.getFarmId();
   const currentContext = farmContextService.getContext();
+  if (farmScopedTables.has(tableName) && !currentFarmId) {
+    throw new Error('Contexto da fazenda ausente. Reative o aplicativo antes de salvar.');
+  }
   const scopedData = op === 'delete' || !data || !farmScopedTables.has(tableName)
     ? data
     : {
@@ -576,9 +639,31 @@ async function smartWrite(
             }
           : {})
       };
-  const safeData = tableName === 'anomalies' ? (normalizeAnomaly(scopedData) || scopedData) : scopedData;
+  const safeData = tableName === 'anomalies'
+    ? (normalizeAnomaly(scopedData) || scopedData)
+    : tableName === 'instructions'
+      ? (normalizeInstruction(scopedData) || scopedData)
+      : tableName === 'notices'
+        ? (normalizeNotice(scopedData) || scopedData)
+        : tableName === 'improvements'
+          ? (normalizeImprovement(scopedData) || scopedData)
+          : scopedData;
 
   const id = op === 'delete' ? (localId ?? data) : localId ?? localRecordId(tableName, safeData);
+  const deletePayload = op !== 'delete' ? safeData : (() => {
+    const farm_id = currentFarmId || undefined;
+    const rawId = String(localId ?? data ?? '');
+    if (tableName === 'milk_daily') {
+      return { farm_id, date: rawId.replace(`${farm_id}_`, '') };
+    }
+    if (tableName === 'daily_metrics') {
+      const identity = rawId.replace(`${farm_id}_`, '');
+      const separator = identity.lastIndexOf('_');
+      return { farm_id, date: identity.slice(0, separator), type: identity.slice(separator + 1) };
+    }
+    if (tableName === 'sectors') return { farm_id, id: rawId, name: String(data || rawId) };
+    return { farm_id, id: rawId };
+  })();
 
   if (!id) {
     throw new Error(`Operação ${op} sem id em ${tableName}`);
@@ -586,15 +671,16 @@ async function smartWrite(
 
   const record = { id, data: op === 'delete' ? null : safeData, updated_at: nowISO(), synced: false, mediaTotalBytes: 0 };
 
-  if (op === 'delete') await localdb.delete(tableName, id);
-  else await localdb.put(tableName, record);
-
-  await localdb.addToOutbox({ tableName, op, payload: safeData, created_at: nowISO(), status: 'pending' });
+  const outboxItem = { tableName, op, payload: deletePayload, created_at: nowISO(), status: 'pending' };
+  if (op === 'delete') await localdb.deleteWithOutbox(tableName, id, outboxItem);
+  else await localdb.putWithOutbox(tableName, record, outboxItem);
 
   notify(isOnline() ? 'Salvando...' : 'Salvo offline.', 'info');
 
   if (isOnline()) {
-    syncService.syncAll();
+    void syncService.syncAll().catch((error) => {
+      console.error(`[smartWrite] Sync imediato de ${tableName} falhou; item mantido no outbox:`, error);
+    });
   }
 }
 
@@ -634,23 +720,26 @@ async function migrateRaspagemToConforto() {
 // Ocorre quando o app trava entre a escrita local e a escrita no outbox.
 // Os registros ficam visíveis localmente mas nunca sobem pro servidor.
 async function recoverOrphanedRecords(): Promise<void> {
-  const tables = ['anomalies', 'instructions', 'notices', 'improvements', 'farm_docs',
-    'daily_metrics', 'milk_daily'];
+  // Somente dados operacionais criados pelo usuário entram nesta recuperação.
+  // Versões antigas também marcavam seeds de menu/setores/funcionários como
+  // synced=false; reprocessá-los cria dezenas de pendências artificiais.
   try {
-    const pending = await localdb.getPendingOutbox();
-    const outboxKeys = new Set(pending.map(item => {
-      const p = item.payload;
+    const [pending, errors] = await Promise.all([
+      localdb.getPendingOutbox(),
+      localdb.getOutboxErrors(10000)
+    ]);
+    const activeOutbox = [...pending, ...errors];
+    const outboxKeys = new Set(activeOutbox.map(item => {
+      const p = item.op === 'delete'
+        ? item.payload
+        : syncService.repairPayloadContext(item.payload, item.tableName);
       if (!p) return '';
-      const fid = (typeof p === 'object' && p.farm_id) ? `${p.farm_id}_` : '';
-      let id: string;
-      if (item.tableName === 'daily_metrics' && p.date && p.type) id = `${fid}${p.date}_${p.type}`;
-      else if (item.tableName === 'milk_daily' && p.date) id = `${fid}${p.date}`;
-      else id = p.id ?? p.date ?? '';
+      const id = localRecordId(item.tableName, p);
       return `${item.tableName}:${id}`;
     }));
 
     let count = 0;
-    for (const tableName of tables) {
+    for (const tableName of ORPHAN_RECOVERY_TABLES) {
       const unsynced = await localdb.getUnsyncedRawRecords(tableName);
       for (const record of unsynced) {
         if (!record.data) continue;
@@ -678,8 +767,10 @@ const isRemoteHttpUrl = (value?: string): boolean => {
 
 // Pre-cache de mídia remota: baixa em background todas as mídias que vieram
 // de outros dispositivos para que fiquem disponíveis offline.
-async function preCacheAllMedia(): Promise<void> {
-  if (!isOnline()) return;
+async function preCacheAllMedia(): Promise<boolean> {
+  if (!isOnline()) return false;
+  const currentFarmId = farmContextService.getFarmId();
+  if (!currentFarmId) return false;
   const tablesWithMedia = ['anomalies', 'instructions', 'notices', 'improvements', 'farm_docs'];
   let cached = 0;
   let skipped = 0;
@@ -689,21 +780,25 @@ async function preCacheAllMedia(): Promise<void> {
 
   for (const tableName of tablesWithMedia) {
     try {
-      const records = await localdb.getAll<any>(tableName);
+      const records = (await localdb.getAll<any>(tableName))
+        .filter((record) => record?.farm_id === currentFarmId);
       for (const record of records) {
         const items: any[] = tableName === 'farm_docs'
           ? (record.media ? [record.media] : [])
           : (Array.isArray(record.media) ? record.media : []);
 
         for (const m of items) {
-          if (!isOnline()) return; // parar se caiu a internet
+          if (!isOnline()) return false; // parar se caiu a internet
           if (Date.now() - startedAt > maxRuntimeMs || cached >= maxCachedPerRun) {
             if (cached > 0) {
               console.log(`[MediaCache] Pausado após ${cached} mídia(s); continuará em outra rodada.`);
             }
-            return;
+            return false;
           }
           if (!m || (!m.remotePath && !m.remoteUrl && !isRemoteHttpUrl(m.uri))) continue;
+          // Fotos precisam estar sempre disponíveis offline. Arquivos grandes e
+          // vídeos são cacheados sob demanda quando o usuário os abre.
+          if (m.type !== 'photo') continue;
           if (mediaService.isOfflineCached(m)) { skipped++; continue; }
 
           const ok = await mediaService.cacheRemoteItem(m);
@@ -719,6 +814,7 @@ async function preCacheAllMedia(): Promise<void> {
     console.log(`[MediaCache] ${cached} mídias cacheadas, ${skipped} já existiam`);
     notify(`${cached} mídia(s) salva(s) para uso offline.`, 'info');
   }
+  return true;
 }
 
 // Migração one-time: re-keying de registros milk_daily e daily_metrics do formato
@@ -726,7 +822,7 @@ async function preCacheAllMedia(): Promise<void> {
 // Necessário para dispositivos que já têm dados no formato anterior.
 async function migrateLocalIds(): Promise<void> {
   const FLAG = 'local_id_migration_farm_prefix_v1';
-  const CONTEXT_FLAG = 'local_context_repair_farm_prefix_v2';
+  const CONTEXT_FLAG = 'local_context_repair_farm_prefix_v3';
 
   try {
     const ctx = farmContextService.getContext();
@@ -791,19 +887,26 @@ async function migrateLocalIds(): Promise<void> {
       'farm_monthly_stats'
     ];
     let repaired = 0;
+    let ambiguous = 0;
 
     for (const tableName of legacyTables) {
       const rows = await localdb.getAll<any>(tableName);
       for (const row of rows) {
         if (!row || typeof row !== 'object') continue;
         const needsFarm = !row.farm_id;
+        const oldId = localRecordId(tableName, row);
+        const raw = await localdb.getRawById(tableName, oldId);
+        // Somente dados locais ainda não enviados podem receber a fazenda atual
+        // sem ambiguidade. Caches legados sincronizados ficam preservados e ocultos.
+        if (needsFarm && raw?.synced !== false) {
+          ambiguous++;
+          continue;
+        }
         const needsEmployee = metadataTables.has(tableName) && !row.employee_id && !!ctx.employee_id;
         const needsEmployeeName = metadataTables.has(tableName) && !row.employee_name && !!ctx.employee_name;
         const needsDevice = metadataTables.has(tableName) && !row.device_id && !!ctx.device_id;
         if (!needsFarm && !needsEmployee && !needsEmployeeName && !needsDevice) continue;
 
-        const oldId = localRecordId(tableName, row);
-        const raw = await localdb.getRawById(tableName, oldId);
         const next = {
           ...row,
           farm_id: row.farm_id || farmId,
@@ -833,6 +936,10 @@ async function migrateLocalIds(): Promise<void> {
       console.log(`[MigrateLocalIds] ${repaired} registro(s) locais antigos receberam contexto da fazenda.`);
       notify(`${repaired} registro(s) locais antigos preparados para sincronizar.`, 'info');
     }
+    if (ambiguous > 0) {
+      console.warn(`[MigrateLocalIds] ${ambiguous} registro(s) sem farm_id permaneceram legados e ambíguos.`);
+      try { localStorage.setItem('legacy_ambiguous_records_v1', String(ambiguous)); } catch { /* ignore */ }
+    }
     try { localStorage.setItem(CONTEXT_FLAG, 'true'); } catch { /* ignore */ }
   } catch (e) {
     console.error('[MigrateLocalIds] Erro:', e);
@@ -840,6 +947,8 @@ async function migrateLocalIds(): Promise<void> {
 }
 
 export const db = {
+  getDefaultUIConfig: (): UIConfig => normalizeUIConfig(DEFAULT_UI_CONFIG, DEFAULT_UI_CONFIG),
+
   syncPendingData: () => syncService.syncAll(),
   migrateRaspagemToConforto,
   migrateLocalIds,
@@ -848,20 +957,29 @@ export const db = {
 
   getSyncStatus: async () => {
     try {
-      const [pending, errors] = await Promise.all([
+      const [summary, pending, errors] = await Promise.all([
+        localdb.getOutboxSummary(),
         localdb.getPendingOutbox(),
         localdb.getOutboxErrors(25)
       ]);
 
       return {
-        pendingCount: pending.length,
-        errorCount: errors.length,
+        pendingCount: summary.pending,
+        errorCount: summary.errors,
         pending,
-        errors
+        errors,
+        lastError: summary.lastError
       };
     } catch (e) {
       console.error('Erro getSyncStatus:', e);
-      return { pendingCount: 0, errorCount: 0, pending: [], errors: [] };
+      const message = e instanceof Error ? e.message : String(e);
+      return {
+        pendingCount: 0,
+        errorCount: 1,
+        pending: [],
+        errors: [{ id: 'localdb', tableName: 'banco_local', errorMessage: message, created_at: nowISO() }],
+        lastError: { tableName: 'banco_local', errorMessage: message }
+      };
     }
   },
 
@@ -883,94 +1001,140 @@ export const db = {
   },
 
   refreshFromServer: async () => {
+    const tables = [
+      'ui_config', 'sectors', 'employees',
+      'anomalies', 'instructions', 'notices', 'improvements', 'farm_docs',
+      'milk_daily', 'daily_metrics', 'farm_monthly_stats'
+    ];
+    const statuses: Record<string, boolean> = {};
     try {
-      if (!isOnline()) return;
-      const tables = [
-        'ui_config', 'sectors', 'employees',
-        'anomalies', 'instructions', 'notices', 'improvements', 'farm_docs',
-        'milk_daily', 'daily_metrics', 'farm_monthly_stats'
-      ];
+      if (!isOnline()) return { ok: false, tables: statuses, error: 'offline' };
       const scope = getRefreshScope();
-      const results = await Promise.allSettled(
+      const results = await Promise.all(
         tables.map(async (t) => {
-          const ok = await refreshFromServer(t);
-          if (ok) smartReadHydratedKeys.add(`${scope}|${t}`);
+          try {
+            const ok = await refreshFromServer(t);
+            statuses[t] = ok;
+            if (ok) smartReadHydratedKeys.add(`${scope}|${t}`);
+            return { status: 'fulfilled' as const, value: ok };
+          } catch (reason) {
+            return { status: 'rejected' as const, reason };
+          }
         })
       );
-      for (const r of results) {
-        if (r.status === 'rejected') console.error('[refreshFromServer] tabela falhou:', r.reason);
+      for (let index = 0; index < results.length; index++) {
+        const settled = results[index];
+        if (settled.status === 'rejected') {
+          statuses[tables[index]] = false;
+          console.error('[refreshFromServer] tabela falhou:', settled.reason);
+        }
       }
+      const critical = ['employees', 'anomalies', 'milk_daily', 'daily_metrics'];
+      return { ok: critical.every((table) => statuses[table] === true), tables: statuses };
     } catch (e) {
       console.error('Erro ao atualizar do servidor:', e);
+      return { ok: false, tables: statuses, error: e instanceof Error ? e.message : String(e) };
     }
   },
 
   forceRefreshTable: async (tableName: string) => {
     try {
-      if (!isOnline()) return;
-      clearLastRefresh(tableName);
-      const ok = await refreshFromServer(tableName);
+      if (!isOnline()) return false;
+      const ok = await forceRefreshFromServer(tableName);
       if (ok) smartReadHydratedKeys.add(`${getRefreshScope()}|${tableName}`);
+      return ok;
     } catch (e) {
       console.error(`Erro ao forcar refresh de ${tableName}:`, e);
+      return false;
     }
   },
 
   forceFullRefreshFromServer: async () => {
+    const tables = [
+      'ui_config', 'sectors', 'employees',
+      'anomalies', 'instructions', 'notices', 'improvements', 'farm_docs',
+      'milk_daily', 'daily_metrics', 'farm_monthly_stats'
+    ];
+    const criticalTables = new Set([
+      'employees', 'anomalies', 'instructions', 'notices', 'improvements',
+      'milk_daily', 'daily_metrics'
+    ]);
+    const result: { ok: boolean; tables: Record<string, { ok: boolean; count: number; error?: string }> } = {
+      ok: false,
+      tables: {}
+    };
     try {
-      if (!isOnline()) return;
-      const tables = [
-        'ui_config', 'sectors', 'employees',
-        'anomalies', 'instructions', 'notices', 'improvements', 'farm_docs',
-        'milk_daily', 'daily_metrics', 'farm_monthly_stats'
-      ];
-      tables.forEach(clearLastRefresh);
+      if (!isOnline()) {
+        for (const table of tables) result.tables[table] = { ok: false, count: 0, error: 'offline' };
+        return result;
+      }
       const scope = getRefreshScope();
-      const results = await Promise.allSettled(
+      const results = await Promise.all(
         tables.map(async (t) => {
-          const ok = await refreshFromServer(t);
-          if (ok) smartReadHydratedKeys.add(`${scope}|${t}`);
+          try {
+            const ok = await forceRefreshFromServer(t);
+            if (ok) smartReadHydratedKeys.add(`${scope}|${t}`);
+            result.tables[t] = { ok, count: ok ? await localdb.getAll<any>(t).then(rows => filterByCurrentFarm(t, rows).length) : 0, error: ok ? undefined : 'refresh failed' };
+            return { status: 'fulfilled' as const, value: ok };
+          } catch (reason) {
+            return { status: 'rejected' as const, reason };
+          }
         })
       );
-      for (const r of results) {
-        if (r.status === 'rejected') console.error('[forceFullRefreshFromServer] tabela falhou:', r.reason);
+      for (let index = 0; index < results.length; index++) {
+        const settled = results[index];
+        const table = tables[index];
+        if (settled.status === 'rejected') {
+          result.tables[table] = { ok: false, count: 0, error: String(settled.reason?.message || settled.reason) };
+          console.error('[forceFullRefreshFromServer] tabela falhou:', settled.reason);
+        }
       }
+      result.ok = tables.every((table) => !criticalTables.has(table) || result.tables[table]?.ok === true);
+      return result;
     } catch (e) {
       console.error('Erro ao forcar carga completa do servidor:', e);
+      result.ok = false;
+      return result;
     }
   },
 
   refreshDailyMetrics: async () => {
-    if (!isOnline()) return;
-    await refreshFromServer('daily_metrics');
+    if (!isOnline()) return false;
+    return refreshFromServer('daily_metrics');
   },
 
   refreshMilkDaily: async () => {
-    if (!isOnline()) return;
-    await refreshFromServer('milk_daily');
+    if (!isOnline()) return false;
+    return refreshFromServer('milk_daily');
   },
 
   getSettings: async (): Promise<FarmSettings> => {
     const currentFarmId = farmContextService.getFarmId();
+    // Configuração remota tem prioridade quando online para não manter stale
+    // settings local indefinidamente; offline continua usando o cache local.
+    if (isOnline()) {
+      try {
+        let q = supabase.from('farm_settings').select('*').limit(1);
+        if (currentFarmId) q = q.eq('farm_id', currentFarmId);
+        let { data, error } = await q;
+        if ((!data || data.length === 0) && currentFarmId && !error) {
+          const global = await supabase.from('farm_settings').select('*').is('farm_id', null).limit(1);
+          data = global.data;
+          error = global.error;
+        }
+        const raw = !error && data?.[0]?.data ? data[0].data : null;
+        if (raw && typeof raw === 'object') return { ...MOCK_SETTINGS, ...raw };
+      } catch {
+        // Fallback local abaixo.
+      }
+    }
+
     const localSettingsId = currentFarmId ? `${currentFarmId}_1` : '1';
     const localSettings = await localdb.getById<FarmSettings>('settings', localSettingsId);
     if (localSettings) return localSettings;
     if (localSettingsId !== '1') {
       const legacyLocalSettings = await localdb.getById<FarmSettings>('settings', '1');
       if (legacyLocalSettings) return legacyLocalSettings;
-    }
-    // Compatibilidade: o SQL historico cria farm_settings, enquanto versoes do app
-    // usam settings. Nao renomeamos tabelas; tentamos ler farm_settings.data se existir.
-    if (isOnline()) {
-      try {
-        let q = supabase.from('farm_settings').select('*').limit(1);
-        if (currentFarmId) q = q.or(`farm_id.eq.${currentFarmId},farm_id.is.null`);
-        const { data, error } = await q;
-        const raw = !error && data?.[0]?.data ? data[0].data : null;
-        if (raw && typeof raw === 'object') return { ...MOCK_SETTINGS, ...raw };
-      } catch {
-        // ignore
-      }
     }
     return MOCK_SETTINGS;
   },
@@ -980,23 +1144,32 @@ export const db = {
   },
 
   getUIConfig: async (): Promise<UIConfig> => {
-    const res = await smartRead<UIConfig>('ui_config', [DEFAULT_UI_CONFIG], '');
-    const current = res[0] || DEFAULT_UI_CONFIG;
+    try {
+      const res = await smartRead<UIConfig>('ui_config', [DEFAULT_UI_CONFIG], '');
+      const current = normalizeUIConfig(res[0], DEFAULT_UI_CONFIG);
 
-    // Adicionar apenas botões novos (não substituir customizações do usuário)
-    const currentIds = new Set(current.buttons.map(b => b.id));
-    const missingButtons = DEFAULT_UI_CONFIG.buttons.filter(b => !currentIds.has(b.id));
+      // Adicionar apenas botões novos (não substituir customizações do usuário)
+      const currentIds = new Set(current.buttons.map(b => b.id));
+      const missingButtons = DEFAULT_UI_CONFIG.buttons.filter(b => !currentIds.has(b.id));
 
-    if (missingButtons.length > 0) {
-      const merged: UIConfig = {
-        ...current,
-        buttons: [...current.buttons, ...missingButtons]
-      };
-      await db.saveUIConfig(merged);
-      return merged;
+      if (missingButtons.length > 0) {
+        const merged: UIConfig = {
+          ...current,
+          buttons: [...current.buttons, ...missingButtons]
+        };
+        try {
+          await db.saveUIConfig(merged);
+        } catch (error) {
+          console.warn('[UIConfig] Configuração reparada em memória; persistência ficará para nova tentativa.', error);
+        }
+        return merged;
+      }
+
+      return current;
+    } catch (error) {
+      console.error('[UIConfig] Falha ao carregar configuração; usando padrão seguro.', error);
+      return normalizeUIConfig(DEFAULT_UI_CONFIG, DEFAULT_UI_CONFIG);
     }
-
-    return current;
   },
   saveUIConfig: async (c: UIConfig) => {
     const farmId = farmContextService.getFarmId();
@@ -1032,10 +1205,15 @@ export const db = {
     }
   },
 
-  getEmployees: async () => smartRead<Employee>('employees', DEFAULT_EMPLOYEES_LIST, ''),
+  // Funcionários nunca usam lista fixa: o cache e o servidor são isolados pela fazenda ativa.
+  getEmployees: async () => normalizeEmployees(await smartRead<Employee>('employees', [], '')),
   addEmployee: async (e: Employee) => smartWrite('employees', e, 'upsert'),
   updateEmployee: async (e: Employee) => smartWrite('employees', e, 'update'),
-  removeEmployee: async (id: string) => smartWrite('employees', id, 'delete'),
+  removeEmployee: async (id: string) => {
+    const employee = await localdb.getById<Employee>('employees', id);
+    if (!employee) throw new Error('Funcionário não encontrado para desativação.');
+    return smartWrite('employees', { ...employee, status: 'blocked' }, 'update');
+  },
 
   migrateAnomalyShape: async () => {
     const FLAG = 'anomaly_shape_migration_v1';
@@ -1071,7 +1249,7 @@ export const db = {
   auditAnomalies: async (): Promise<AnomalyAudit> => {
     const farmId = farmContextService.getFarmId();
     const localRows = await localdb.getAll<any>('anomalies');
-    const localScopedRows = farmId ? localRows.filter(row => !row?.farm_id || row.farm_id === farmId) : localRows;
+    const localScopedRows = farmId ? localRows.filter(row => row?.farm_id === farmId) : [];
     const visibleRows = normalizeAnomalies(localScopedRows);
     const unsyncedRows = await localdb.getUnsyncedRawRecords('anomalies');
     const localStats = countAnomalyRows(localScopedRows, farmId);
@@ -1122,74 +1300,46 @@ export const db = {
   addAnomaly: async (a: Anomaly) => smartWrite('anomalies', a, 'upsert'),
   updateAnomaly: async (a: Anomaly) => smartWrite('anomalies', a, 'update'),
   deleteAnomaly: async (id: string) => {
-    const item = normalizeAnomaly(await localdb.getById<Anomaly>('anomalies', id));
-    if (item) {
-      for (const m of item.media) {
-        await mediaService.deleteMedia(m);
-      }
-    }
     return smartWrite('anomalies', id, 'delete');
   },
   getAnomalyById: async (id: string) => {
     const row = await localdb.getById<Anomaly>('anomalies', id);
-    return normalizeAnomaly(row);
+    return normalizeAnomaly(normalizeRemoteUrls('anomalies', row));
   },
 
-  getInstructions: async () => smartRead<Instruction>('instructions', [], 'createdAt'),
+  getInstructions: async () => (await smartRead<Instruction>('instructions', [], 'createdAt')).map(normalizeInstruction).filter((item): item is Instruction => item !== null),
   addInstruction: async (i: Instruction) => smartWrite('instructions', i, 'upsert'),
   updateInstruction: async (i: Instruction) => smartWrite('instructions', i, 'update'),
   deleteInstruction: async (id: string) => {
-    const item = await localdb.getById<Instruction>('instructions', id);
-    if (item && item.media) {
-      for (const m of item.media) {
-        await mediaService.deleteMedia(m);
-      }
-    }
     return smartWrite('instructions', id, 'delete');
   },
-  getInstructionById: async (id: string) => await localdb.getById<Instruction>('instructions', id),
+  getInstructionById: async (id: string) => normalizeInstruction(normalizeRemoteUrls('instructions', await localdb.getById<Instruction>('instructions', id))),
 
-  getNotices: async () => smartRead<Notice>('notices', [], 'createdAt'),
+  getNotices: async () => (await smartRead<Notice>('notices', [], 'createdAt')).map(normalizeNotice).filter((item): item is Notice => item !== null),
   addNotice: async (n: Notice) => smartWrite('notices', n, 'upsert'),
   updateNotice: async (n: Notice) => smartWrite('notices', n, 'update'),
   deleteNotice: async (id: string) => {
-    const item = await localdb.getById<Notice>('notices', id);
-    if (item && item.media) {
-      for (const m of item.media) {
-        await mediaService.deleteMedia(m);
-      }
-    }
     return smartWrite('notices', id, 'delete');
   },
 
-  getImprovements: async () => smartRead<Improvement>('improvements', [], 'createdAt'),
+  getImprovements: async () => (await smartRead<Improvement>('improvements', [], 'createdAt')).map(normalizeImprovement).filter((item): item is Improvement => item !== null),
   addImprovement: async (i: Improvement) => smartWrite('improvements', i, 'upsert'),
   updateImprovement: async (i: Improvement) => smartWrite('improvements', i, 'update'),
   deleteImprovement: async (id: string) => {
-    const item = await localdb.getById<Improvement>('improvements', id);
-    if (item && item.media) {
-      for (const m of item.media) {
-        await mediaService.deleteMedia(m);
-      }
-    }
     return smartWrite('improvements', id, 'delete');
   },
-  getImprovementById: async (id: string) => await localdb.getById<Improvement>('improvements', id),
+  getImprovementById: async (id: string) => normalizeImprovement(normalizeRemoteUrls('improvements', await localdb.getById<Improvement>('improvements', id))),
 
-  getFarmDocs: async () => smartRead<FarmDoc>('farm_docs', [], 'updatedAt'),
-  getFarmDoc: async (id: string) => await localdb.getById<FarmDoc>('farm_docs', id),
+  getFarmDocs: async () => (await smartRead<FarmDoc>('farm_docs', [], 'updatedAt')).map(normalizeFarmDoc).filter((item): item is FarmDoc => item !== null),
+  getFarmDoc: async (id: string) => normalizeFarmDoc(normalizeRemoteUrls('farm_docs', await localdb.getById<FarmDoc>('farm_docs', id))),
   addFarmDoc: async (d: FarmDoc) => smartWrite('farm_docs', d, 'upsert'),
   saveFarmDoc: async (d: FarmDoc) => smartWrite('farm_docs', d, 'upsert'),
   updateFarmDoc: async (d: FarmDoc) => smartWrite('farm_docs', d, 'update'),
   deleteFarmDoc: async (id: string) => {
-    const item = await localdb.getById<FarmDoc>('farm_docs', id);
-    if (item && item.media) {
-      await mediaService.deleteMedia(item.media);
-    }
     return smartWrite('farm_docs', id, 'delete');
   },
 
-  getMilkHistory: async () => smartRead<DailyMilk>('milk_daily', [], 'date'),
+  getMilkHistory: async () => (await smartRead<DailyMilk>('milk_daily', [], 'date')).map(normalizeDailyMilk).filter((item): item is DailyMilk => item !== null),
   addMilkEntry: async (entry: DailyMilk) => {
     const farmId = farmContextService.getFarmId();
     const localId = farmId ? `${farmId}_${entry.date}` : entry.date;
@@ -1203,15 +1353,20 @@ export const db = {
   deleteMilkEntry: async (date: string) => {
     const farmId = farmContextService.getFarmId();
     const localId = farmId ? `${farmId}_${date}` : date;
-    await localdb.delete('milk_daily', localId);
-    await localdb.addToOutbox({ tableName: 'milk_daily', op: 'delete', payload: date, created_at: nowISO(), status: 'pending' });
+    await localdb.deleteWithOutbox('milk_daily', localId, {
+      tableName: 'milk_daily', op: 'delete', payload: { farm_id: farmId, date }, created_at: nowISO(), status: 'pending'
+    });
     notify(isOnline() ? 'Salvando...' : 'Salvo offline.', 'info');
-    if (isOnline()) syncService.syncAll();
+    if (isOnline()) {
+      void syncService.syncAll().catch((error) => {
+        console.error('[deleteMilkEntry] Sync imediato falhou; item mantido no outbox:', error);
+      });
+    }
   },
 
   getDailyMetrics: async (type: string) => {
     const all = await smartRead<DailyMetric>('daily_metrics', [], 'date');
-    return all.filter((x: any) => x.type === type);
+    return all.map(normalizeDailyMetric).filter((x): x is DailyMetric => x !== null && x.type === type);
   },
   addDailyMetric: async (entry: DailyMetric) => {
     const farmId = farmContextService.getFarmId();
@@ -1226,21 +1381,25 @@ export const db = {
   deleteDailyMetric: async (date: string, type: string) => {
     const farmId = farmContextService.getFarmId();
     const localId = farmId ? `${farmId}_${date}_${type}` : `${date}_${type}`;
-    await localdb.delete('daily_metrics', localId);
-    await localdb.addToOutbox({ tableName: 'daily_metrics', op: 'delete', payload: `${date}_${type}`, created_at: nowISO(), status: 'pending' });
+    await localdb.deleteWithOutbox('daily_metrics', localId, {
+      tableName: 'daily_metrics', op: 'delete', payload: { farm_id: farmId, date, type }, created_at: nowISO(), status: 'pending'
+    });
     notify(isOnline() ? 'Salvando...' : 'Salvo offline.', 'info');
-    if (isOnline()) syncService.syncAll();
+    if (isOnline()) {
+      void syncService.syncAll().catch((error) => {
+        console.error('[deleteDailyMetric] Sync imediato falhou; item mantido no outbox:', error);
+      });
+    }
   },
 
-  getMonthlyStats: async () => smartRead<MonthlyStats>('farm_monthly_stats', [], 'monthKey'),
+  getMonthlyStats: async () => (await smartRead<MonthlyStats>('farm_monthly_stats', [], 'monthKey')).map(normalizeMonthlyStats).filter((item): item is MonthlyStats => item !== null),
   saveMonthlyStats: async (stats: MonthlyStats) => {
     const farmId = farmContextService.getFarmId();
     const localId = farmId ? `${farmId}_${stats.monthKey}` : stats.monthKey;
     return smartWrite('farm_monthly_stats', stats, 'upsert', 'monthKey', localId);
   },
 
-  clearAllData: async () => {
-    localStorage.clear();
+  clearPreferencesOnly: async () => {
     window.location.reload();
   }
 };

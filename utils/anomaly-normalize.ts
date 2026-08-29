@@ -1,11 +1,8 @@
-import { Anomaly, MediaItem } from '../types';
+import { Anomaly } from '../types';
+import { normalizeMediaItems } from './record-normalize';
+import { canonicalizeSector } from '../constants/sectors';
 
 const asText = (value: unknown, fallback = ''): string => typeof value === 'string' ? value : fallback;
-
-const normalizeMedia = (value: unknown): MediaItem[] => {
-  if (!Array.isArray(value)) return [];
-  return value.filter((item): item is MediaItem => !!item && typeof item === 'object');
-};
 
 export function normalizeAnomaly(value: unknown): Anomaly | null {
   if (!value || typeof value !== 'object') return null;
@@ -21,10 +18,10 @@ export function normalizeAnomaly(value: unknown): Anomaly | null {
     employee_name: typeof row.employee_name === 'string' ? row.employee_name : undefined,
     createdAt: asText(row.createdAt),
     responsible: asText(row.responsible, asText(row.employee_name)),
-    sector: asText(row.sector),
+    sector: canonicalizeSector(row.sector),
     description: asText(row.description),
     immediateSolution: asText(row.immediateSolution),
-    media: normalizeMedia(row.media),
+    media: normalizeMediaItems(row.media),
     resolvedAt: typeof row.resolvedAt === 'string' ? row.resolvedAt : undefined,
     resolvedBy: typeof row.resolvedBy === 'string' ? row.resolvedBy : undefined
   } as Anomaly;
