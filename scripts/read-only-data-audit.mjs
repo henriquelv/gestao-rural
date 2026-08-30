@@ -163,6 +163,9 @@ if (!milkError && milkRows) {
   }
   console.log(JSON.stringify({
     table: 'milk_daily_monthly',
+    totalRecords: milkRows.length,
+    oldest: milkRows.at(0)?.date || null,
+    newest: milkRows.at(-1)?.date || null,
     duplicateDates,
     invalidValues,
     months: Object.fromEntries([...monthly.entries()].map(([month, stats]) => [month, {
@@ -170,6 +173,18 @@ if (!milkError && milkRows) {
       days: stats.days,
       average: Number((stats.total / stats.days).toFixed(2))
     }]))
+  }));
+
+  const sampleIndexes = [...new Set(Array.from({ length: Math.min(20, milkRows.length) }, (_, index) => (
+    Math.round(index * (milkRows.length - 1) / Math.max(1, Math.min(20, milkRows.length) - 1))
+  )))];
+  console.log(JSON.stringify({
+    table: 'milk_daily_samples',
+    samples: sampleIndexes.map((index) => ({
+      index,
+      date: milkRows[index].date,
+      liters: Number(milkRows[index].liters)
+    }))
   }));
 }
 

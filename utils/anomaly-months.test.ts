@@ -89,4 +89,22 @@ describe('anomaly dates', () => {
     expect(months[11].bySetor[SECTORS_LIST[0]]).toBe(0);
     expect(total).toBe(883);
   });
+
+  it.each([10, 500, 650, 1001, 2000])('agrupa %i anomalias sem truncar em 1.000', (size) => {
+    const anomalies = Array.from({ length: size }, (_, index) => ({
+      id: `stress-${index}`,
+      createdAt: `2026-${String((index % 11) + 2).padStart(2, '0')}-15T12:00:00-03:00`,
+      sector: SECTORS_LIST[index % SECTORS_LIST.length]
+    })) as any[];
+
+    const months = groupAnomaliesByMonth(anomalies, 2026);
+    const total = months.reduce((sum, month) => (
+      sum + Object.values(month.bySetor).reduce((subtotal, count) => subtotal + count, 0) + month.unknownCount
+    ), 0);
+
+    expect(months).toHaveLength(12);
+    expect(months[0].label).toBe('jan 26');
+    expect(Object.values(months[0].bySetor).reduce((sum, count) => sum + count, 0)).toBe(0);
+    expect(total).toBe(size);
+  });
 });

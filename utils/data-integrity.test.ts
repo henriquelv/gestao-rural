@@ -44,6 +44,24 @@ describe('identidade local multi-fazenda', () => {
       'farm-1_2026-08-23'
     ]);
   });
+
+  it('reconcilia dois aparelhos sem sobrescrever leite local pendente', () => {
+    const id = getLocalRecordId('milk_daily', { farm_id: 'farm-1', date: '2026-08-23' });
+    const serverAfterDeviceA = { id, liters: 120, synced: true };
+    const deviceB = new Map([[id, { id, liters: 100, synced: true }]]);
+
+    // B recebe a alteração sincronizada por A quando não possui pendência local.
+    const firstProtected = getProtectedLocalRecordIds('milk_daily', [], []);
+    if (!firstProtected.has(id)) deviceB.set(id, serverAfterDeviceA);
+    expect(deviceB.get(id)?.liters).toBe(120);
+
+    // B altera offline; uma resposta mais nova do servidor não pode sobrescrevê-lo.
+    deviceB.set(id, { id, liters: 130, synced: false });
+    const secondProtected = getProtectedLocalRecordIds('milk_daily', [{ id }], []);
+    if (!secondProtected.has(id)) deviceB.set(id, { id, liters: 125, synced: true });
+
+    expect(deviceB.get(id)).toEqual({ id, liters: 130, synced: false });
+  });
 });
 
 describe('normalizacao de dados legados', () => {

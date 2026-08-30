@@ -1,7 +1,12 @@
 const debugPort = process.env.CHROME_DEBUG_PORT || '9223';
 const appUrl = process.env.SMOKE_APP_URL || 'http://127.0.0.1:3011';
 const nativeMode = process.env.SMOKE_NATIVE === '1';
+const anomalyCount = Number(process.env.SMOKE_ANOMALY_COUNT || '650');
 const farmId = '00000000-0000-4000-8000-000000000001';
+
+if (!Number.isInteger(anomalyCount) || anomalyCount < 1) {
+  throw new Error(`SMOKE_ANOMALY_COUNT invalido: ${process.env.SMOKE_ANOMALY_COUNT}`);
+}
 
 const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
@@ -175,7 +180,9 @@ try {
   await evaluate(send, `window.__smokeSeedPromise = new Promise((resolve, reject) => {
     const request = indexedDB.open('FarmDB_Web_v3');
     request.onerror = () => reject(request.error);
+    request.onblocked = () => reject(new Error('IndexedDB bloqueado por outra conexao'));
     request.onsuccess = () => {
+      try {
       const database = request.result;
       const transaction = database.transaction(['anomalies', 'employees', 'notices', 'instructions', 'improvements', 'milk_daily', 'daily_metrics'], 'readwrite');
       const anomalies = transaction.objectStore('anomalies');
@@ -186,7 +193,14 @@ try {
       const milk = transaction.objectStore('milk_daily');
       const metrics = transaction.objectStore('daily_metrics');
       const now = new Date().toISOString();
-      for (let index = 0; index < 650; index++) {
+      anomalies.clear();
+      employees.clear();
+      notices.clear();
+      instructions.clear();
+      improvements.clear();
+      milk.clear();
+      metrics.clear();
+      for (let index = 0; index < ${anomalyCount}; index++) {
         const id = 'smoke-anomaly-' + index;
         anomalies.put({
           id,
@@ -227,8 +241,15 @@ try {
       // Pendências locais não podem ser apagadas por uma reconciliação remota vazia.
       milk.put({ id: '${farmId}_2026-08-23', data: { farm_id: '${farmId}', date: '2026-08-23', liters: '1250.5' }, updated_at: now, synced: false });
       metrics.put({ id: '${farmId}_2026-08-23_lactation', data: { farm_id: '${farmId}', date: '2026-08-23', type: 'lactation', value: '120' }, updated_at: now, synced: false });
-      transaction.oncomplete = () => resolve(true);
+      transaction.oncomplete = () => {
+        database.close();
+        resolve(true);
+      };
       transaction.onerror = () => reject(transaction.error);
+      transaction.onabort = () => reject(transaction.error || new Error('Transacao IndexedDB abortada'));
+      } catch (error) {
+        reject(error);
+      }
     };
   })`);
 
@@ -273,7 +294,8 @@ try {
     error: localStorage.getItem('last_runtime_error'),
     cards: document.querySelectorAll('[class*="border-l-8"]').length
   })`);
-  if (!list.text.includes('LISTA DE ANOMALIAS') || !list.text.includes('Mostrando 40 de 650') || list.error) {
+  const expectedVisible = Math.min(40, anomalyCount);
+  if (!list.text.includes('LISTA DE ANOMALIAS') || !list.text.includes(`Mostrando ${expectedVisible} de ${anomalyCount}`) || list.error) {
     throw new Error(`Lista de anomalias falhou: ${JSON.stringify(list)}`);
   }
 
@@ -313,7 +335,7 @@ try {
   await navigate(send, `${appUrl}/#/rota-inexistente`);
   await waitFor(send, `location.hash === '#/'`);
 
-  console.log(JSON.stringify({ ok: true, employeeSwitch: true, listCards: list.cards, listTotal: 650, addScreen: true, legacyLists: true, milk: true, unknownRouteRedirect: true }));
+  console.log(JSON.stringify({ ok: true, employeeSwitch: true, listCards: list.cards, listTotal: anomalyCount, addScreen: true, legacyLists: true, milk: true, unknownRouteRedirect: true }));
   }
 } finally {
   socket.close();

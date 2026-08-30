@@ -3,7 +3,7 @@ import { Capacitor } from '@capacitor/core';
 
 const DB_NAME = 'FarmDB_Native_v1';
 
-class NativeFarmDatabase {
+export class NativeFarmDatabase {
   private sqlite: SQLiteConnection;
   private db: SQLiteDBConnection | null = null;
   private initPromise: Promise<void> | null = null;

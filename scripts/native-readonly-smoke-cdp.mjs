@@ -75,6 +75,13 @@ const screens = [
 const { socket, send, runtimeErrors } = await connect();
 try {
   await send('Runtime.enable');
+  await waitFor(send, `Boolean(globalThis.Capacitor?.Plugins?.CapacitorSQLite)`);
+  await waitFor(send, `(async () => {
+    try {
+      const result = await globalThis.Capacitor.Plugins.CapacitorSQLite.isDBOpen({ database: 'FarmDB_Native_v1' });
+      return Boolean(result?.result);
+    } catch { return false; }
+  })()`);
   const sqliteBatch = runSqliteBatchSmoke
     ? await evaluate(send, `(async () => {
         const sqlite = globalThis.Capacitor?.Plugins?.CapacitorSQLite;
