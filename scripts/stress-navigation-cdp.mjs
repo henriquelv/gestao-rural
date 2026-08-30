@@ -1,9 +1,17 @@
 const debugPort = process.env.CHROME_DEBUG_PORT || '9223';
 const cycles = Number(process.env.STRESS_CYCLES || '100');
+const testBaseUrl = new URL(process.env.TEST_BASE_URL || 'http://127.0.0.1:3011');
 const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
 const targets = await fetch(`http://127.0.0.1:${debugPort}/json/list`).then((response) => response.json());
-const target = targets.find((item) => item.type === 'page' && /^http:\/\/(localhost|127\.0\.0\.1):3011/.test(item.url));
+const target = targets.find((item) => {
+  if (item.type !== 'page') return false;
+  try {
+    return new URL(item.url).origin === testBaseUrl.origin;
+  } catch {
+    return false;
+  }
+});
 if (!target) throw new Error('Pagina local de validacao nao encontrada');
 
 const socket = new WebSocket(target.webSocketDebuggerUrl);
@@ -47,7 +55,8 @@ async function waitFor(expression, timeoutMs = 30000) {
     if (await evaluate(expression)) return;
     await wait(100);
   }
-  throw new Error(`Tempo esgotado aguardando: ${expression}`);
+  const state = await evaluate(`({ hash: location.hash, body: document.body.innerText.slice(0, 1000), runtimeError: localStorage.getItem('last_runtime_error') })`);
+  throw new Error(`Tempo esgotado aguardando: ${expression}\nEstado: ${JSON.stringify(state)}`);
 }
 
 const routes = [
@@ -61,6 +70,23 @@ const routes = [
 try {
   await send('Runtime.enable');
   await send('Network.enable');
+
+  // No servidor Vite os chunks de rota chegam por HTTP. Carregue cada rota uma
+  // vez online antes de simular offline; no APK esses mesmos arquivos são locais.
+  await send('Network.emulateNetworkConditions', {
+    offline: false,
+    latency: 0,
+    downloadThroughput: -1,
+    uploadThroughput: -1
+  });
+  await send('Page.reload', { ignoreCache: true });
+  await waitFor(`document.body.innerText.trim().length > 0`);
+  await evaluate(`localStorage.removeItem('last_runtime_error')`);
+  for (const [path, title] of routes) {
+    await evaluate(`location.hash = ${JSON.stringify(path)}`);
+    await waitFor(`document.body.innerText.toUpperCase().includes(${JSON.stringify(title)})`);
+  }
+  runtimeErrors.length = 0;
   await evaluate(`localStorage.removeItem('last_runtime_error')`);
 
   let minimumBodyLength = Number.MAX_SAFE_INTEGER;
@@ -106,5 +132,15 @@ try {
   }
   console.log(JSON.stringify({ ok: true, cycles, minimumBodyLength, finalState, runtimeErrors }, null, 2));
 } finally {
+  try {
+    await send('Network.emulateNetworkConditions', {
+      offline: false,
+      latency: 0,
+      downloadThroughput: -1,
+      uploadThroughput: -1
+    });
+  } catch {
+    // O alvo pode ter sido fechado durante o teste.
+  }
   socket.close();
 }

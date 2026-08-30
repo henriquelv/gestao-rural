@@ -7,6 +7,7 @@ import { createId } from '../utils/id';
 
 // ── Cache offline de mídia remota ──
 const CACHE_INDEX_KEY = 'media_offline_cache_v1';
+const remoteRepairChecks = new Set<string>();
 
 const _getOfflineCacheIndex = (): Record<string, string> => {
   try { return JSON.parse(localStorage.getItem(CACHE_INDEX_KEY) || '{}'); }
@@ -243,7 +244,12 @@ export const mediaService = {
     // mesmo quando o item tem localPath de outro dispositivo.
     if (getOfflineCacheKey(item)) {
       const offlineUrl = await this.loadFromOfflineCache(item);
-      if (offlineUrl) return offlineUrl;
+      if (offlineUrl) {
+        if (navigator.onLine && item.remotePath) {
+          this.repairMissingRemoteFromCache(item).catch(() => {});
+        }
+        return offlineUrl;
+      }
     }
 
     // Se não tem localPath, tenta remoteUrl ou uri
@@ -537,6 +543,65 @@ export const mediaService = {
     delete index[cacheKey];
     _saveOfflineCacheIndex(index);
     return '';
+  },
+
+  /**
+   * Reenvia apenas um objeto comprovadamente ausente usando a cópia offline.
+   * Nunca sobrescreve um objeto existente e não remove a cópia local.
+   */
+  async repairMissingRemoteFromCache(item: MediaItem): Promise<boolean> {
+    const remotePath = item.remotePath || '';
+    const cacheKey = getOfflineCacheKey(item);
+    if (!navigator.onLine || !remotePath || !cacheKey || remoteRepairChecks.has(cacheKey)) return false;
+
+    remoteRepairChecks.add(cacheKey);
+    try {
+      const remoteUrl = this.getRemoteUrl(item);
+      if (!remoteUrl) return false;
+      const response = await fetch(remoteUrl, { headers: { Range: 'bytes=0-0' } });
+      if (response.ok) return false;
+
+      const responseBody = (await response.text()).toLowerCase();
+      const isMissing = response.status === 404
+        || (response.status === 400 && (responseBody.includes('object not found') || responseBody.includes('nosuchkey')));
+      if (!isMissing) return false;
+
+      const cachedPath = _getOfflineCacheIndex()[cacheKey];
+      if (!cachedPath) return false;
+
+      let blob: Blob | null = null;
+      if (this.isNative) {
+        const resolved = resolveDataPath(cachedPath);
+        const uri = await Filesystem.getUri({
+          path: resolved.path,
+          directory: resolved.directory ?? Directory.Data
+        });
+        const response = await fetch(Capacitor.convertFileSrc(uri.uri));
+        if (response.ok) blob = await response.blob();
+      } else {
+        blob = (await webDB.media_blobs.get(cachedPath))?.blob || null;
+      }
+
+      if (!blob) return false;
+      const { error: uploadError } = await supabase.storage.from('media').upload(remotePath, blob, {
+        upsert: false,
+        contentType: blob.type || item.mimeType || 'application/octet-stream'
+      });
+      if (!uploadError) {
+        console.info('[MediaRepair] Objeto ausente restaurado a partir do cache local.', { remotePath });
+        return true;
+      }
+
+      // Outro aparelho pode ter restaurado o mesmo path entre download e upload.
+      const uploadMessage = String((uploadError as any)?.message || '').toLowerCase();
+      return uploadMessage.includes('already exists') || uploadMessage.includes('duplicate');
+    } catch (error) {
+      console.warn('[MediaRepair] Não foi possível verificar/restaurar a mídia.', {
+        remotePath,
+        message: error instanceof Error ? error.message : String(error)
+      });
+      return false;
+    }
   },
 
   /** Retorna quantos itens estão no cache offline */

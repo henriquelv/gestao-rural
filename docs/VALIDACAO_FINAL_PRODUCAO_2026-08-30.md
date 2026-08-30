@@ -207,6 +207,10 @@ auditoria nao os removeu nem alterou metadados.
 
 ## Riscos restantes
 
+Atualizacao: os riscos tecnicos trataveis no codigo foram corrigidos na versao
+`1.0.16`. Resultado e riscos externos remanescentes em
+`docs/CORRECAO_RISCOS_2026-08-30.md`.
+
 1. **Seis midias legadas ausentes no Storage.** O metadado existe, mas o objeto nao.
    O app deve mostrar placeholder; recuperar a imagem exige uma copia externa.
 2. **Android antigo/intermediario nao executado fisicamente.** O minSdk e os

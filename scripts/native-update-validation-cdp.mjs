@@ -75,6 +75,17 @@ try {
   await send('Runtime.enable');
 
   if (mode === 'seed') {
+    await evaluate(send, `(() => {
+      const now = new Date().toISOString();
+      localStorage.setItem('gestao_rural_farm_context_v2', JSON.stringify({
+        farm_id: '${farmId}', farm_name: 'Fazenda Validacao Local',
+        employee_id: '${employeeId}', employee_name: 'FUNCIONARIO VALIDACAO',
+        device_id: 'device-update-validation', status: 'active', license_status: 'active',
+        grace_period_days: 7, last_license_check_at: now, admin_pin: '1234'
+      }));
+      return true;
+    })()`);
+    await send('Page.reload', { ignoreCache: true });
     await waitFor(send, `globalThis.Capacitor?.Plugins?.CapacitorSQLite != null`);
     await waitFor(send, `(async () => {
       try {

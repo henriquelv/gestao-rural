@@ -8,59 +8,42 @@ import { db } from './services/db.service';
 import { notify } from './services/notification.service';
 import { seedImageData } from './services/seed.service';
 import { farmContextService } from './services/farm-context.service';
-import { ActivationScreen } from './screens/ActivationScreen';
-
-// Anomalias
-import { AnomaliesMenuScreen } from './screens/AnomaliesMenuScreen';
-import { AddAnomalyScreen } from './screens/AddAnomalyScreen';
-import { ListAnomaliesScreen } from './screens/ListAnomaliesScreen';
-import { AnomalyDetailScreen } from './screens/AnomalyDetailScreen';
-import { AnomalyQuantityScreen } from './screens/AnomalyQuantityScreen';
-
-// Instruções
-import { InstructionsMenuScreen } from './screens/instructions/InstructionsMenuScreen';
-import { InstructionsSectorMenuScreen } from './screens/instructions/InstructionsSectorMenuScreen';
-import { AddInstructionScreen } from './screens/instructions/AddInstructionScreen';
-import { ListInstructionsScreen } from './screens/instructions/ListInstructionsScreen';
-import { InstructionDetailScreen } from './screens/instructions/InstructionDetailScreen';
-
-// Normas
-import { FarmNormsMenuScreen } from './screens/instructions/FarmNormsMenuScreen';
-import { NormCategoryMenuScreen } from './screens/instructions/NormCategoryMenuScreen';
-import { AddNormSimpleScreen } from './screens/instructions/AddNormSimpleScreen';
-import { NormsCategoryListScreen } from './screens/instructions/NormsCategoryListScreen';
-import { FarmNormsListScreen } from './screens/instructions/FarmNormsListScreen';
-import { StandardDocScreen } from './screens/StandardDocScreen';
-import { FarmNormsScreen } from './screens/FarmNormsScreen';
-import { UpdateNormsScreen } from './screens/UpdateNormsScreen';
-
-// Comunicados
-import { NoticesMenuScreen } from './screens/notices/NoticesMenuScreen';
-import { AddNoticeScreen } from './screens/notices/AddNoticeScreen';
-import { ListNoticesScreen } from './screens/notices/ListNoticesScreen';
-import { NoticeDetailScreen } from './screens/notices/NoticeDetailScreen';
-
-// Melhorias
-import { ImprovementsMenuScreen } from './screens/improvements/ImprovementsMenuScreen';
-import { AddImprovementScreen } from './screens/improvements/AddImprovementScreen';
-import { ListImprovementsScreen } from './screens/improvements/ListImprovementsScreen';
-
-// Dados
-import { FarmDataMenuScreen } from './screens/farmdata/FarmDataMenuScreen';
-import { DataMetricScreen } from './screens/farmdata/DataMetricScreen';
-
-// Telas administrativas grandes são carregadas apenas quando abertas. Os
-// chunks continuam empacotados no APK e funcionam sem internet.
+// As telas continuam empacotadas no APK, mas são analisadas pelo WebView apenas
+// quando abertas. Isso reduz o custo do primeiro carregamento em aparelhos lentos.
+const ActivationScreen = lazy(() => import('./screens/ActivationScreen').then((module) => ({ default: module.ActivationScreen })));
+const AnomaliesMenuScreen = lazy(() => import('./screens/AnomaliesMenuScreen').then((module) => ({ default: module.AnomaliesMenuScreen })));
+const AddAnomalyScreen = lazy(() => import('./screens/AddAnomalyScreen').then((module) => ({ default: module.AddAnomalyScreen })));
+const ListAnomaliesScreen = lazy(() => import('./screens/ListAnomaliesScreen').then((module) => ({ default: module.ListAnomaliesScreen })));
+const AnomalyDetailScreen = lazy(() => import('./screens/AnomalyDetailScreen').then((module) => ({ default: module.AnomalyDetailScreen })));
+const AnomalyQuantityScreen = lazy(() => import('./screens/AnomalyQuantityScreen').then((module) => ({ default: module.AnomalyQuantityScreen })));
+const InstructionsMenuScreen = lazy(() => import('./screens/instructions/InstructionsMenuScreen').then((module) => ({ default: module.InstructionsMenuScreen })));
+const InstructionsSectorMenuScreen = lazy(() => import('./screens/instructions/InstructionsSectorMenuScreen').then((module) => ({ default: module.InstructionsSectorMenuScreen })));
+const AddInstructionScreen = lazy(() => import('./screens/instructions/AddInstructionScreen').then((module) => ({ default: module.AddInstructionScreen })));
+const ListInstructionsScreen = lazy(() => import('./screens/instructions/ListInstructionsScreen').then((module) => ({ default: module.ListInstructionsScreen })));
+const InstructionDetailScreen = lazy(() => import('./screens/instructions/InstructionDetailScreen').then((module) => ({ default: module.InstructionDetailScreen })));
+const FarmNormsMenuScreen = lazy(() => import('./screens/instructions/FarmNormsMenuScreen').then((module) => ({ default: module.FarmNormsMenuScreen })));
+const NormCategoryMenuScreen = lazy(() => import('./screens/instructions/NormCategoryMenuScreen').then((module) => ({ default: module.NormCategoryMenuScreen })));
+const AddNormSimpleScreen = lazy(() => import('./screens/instructions/AddNormSimpleScreen').then((module) => ({ default: module.AddNormSimpleScreen })));
+const NormsCategoryListScreen = lazy(() => import('./screens/instructions/NormsCategoryListScreen').then((module) => ({ default: module.NormsCategoryListScreen })));
+const FarmNormsListScreen = lazy(() => import('./screens/instructions/FarmNormsListScreen').then((module) => ({ default: module.FarmNormsListScreen })));
+const StandardDocScreen = lazy(() => import('./screens/StandardDocScreen').then((module) => ({ default: module.StandardDocScreen })));
+const FarmNormsScreen = lazy(() => import('./screens/FarmNormsScreen').then((module) => ({ default: module.FarmNormsScreen })));
+const UpdateNormsScreen = lazy(() => import('./screens/UpdateNormsScreen').then((module) => ({ default: module.UpdateNormsScreen })));
+const NoticesMenuScreen = lazy(() => import('./screens/notices/NoticesMenuScreen').then((module) => ({ default: module.NoticesMenuScreen })));
+const AddNoticeScreen = lazy(() => import('./screens/notices/AddNoticeScreen').then((module) => ({ default: module.AddNoticeScreen })));
+const ListNoticesScreen = lazy(() => import('./screens/notices/ListNoticesScreen').then((module) => ({ default: module.ListNoticesScreen })));
+const NoticeDetailScreen = lazy(() => import('./screens/notices/NoticeDetailScreen').then((module) => ({ default: module.NoticeDetailScreen })));
+const ImprovementsMenuScreen = lazy(() => import('./screens/improvements/ImprovementsMenuScreen').then((module) => ({ default: module.ImprovementsMenuScreen })));
+const AddImprovementScreen = lazy(() => import('./screens/improvements/AddImprovementScreen').then((module) => ({ default: module.AddImprovementScreen })));
+const ListImprovementsScreen = lazy(() => import('./screens/improvements/ListImprovementsScreen').then((module) => ({ default: module.ListImprovementsScreen })));
+const FarmDataMenuScreen = lazy(() => import('./screens/farmdata/FarmDataMenuScreen').then((module) => ({ default: module.FarmDataMenuScreen })));
+const DataMetricScreen = lazy(() => import('./screens/farmdata/DataMetricScreen').then((module) => ({ default: module.DataMetricScreen })));
 const SettingsScreen = lazy(() => import('./screens/SettingsScreen').then((module) => ({ default: module.SettingsScreen })));
 const DiagnosticScreen = lazy(() => import('./screens/DiagnosticScreen').then((module) => ({ default: module.DiagnosticScreen })));
 const OwnerDashboardScreen = lazy(() => import('./screens/OwnerDashboardScreen').then((module) => ({ default: module.OwnerDashboardScreen })));
-import { SwitchEmployeeScreen } from './screens/SwitchEmployeeScreen';
-
-// Dynamic
-import { GenericMenuScreen } from './screens/GenericMenuScreen';
-
-// PDF Test
-import { PDFTestScreen } from './screens/PDFTestScreen';
+const SwitchEmployeeScreen = lazy(() => import('./screens/SwitchEmployeeScreen').then((module) => ({ default: module.SwitchEmployeeScreen })));
+const GenericMenuScreen = lazy(() => import('./screens/GenericMenuScreen').then((module) => ({ default: module.GenericMenuScreen })));
+const PDFTestScreen = lazy(() => import('./screens/PDFTestScreen').then((module) => ({ default: module.PDFTestScreen })));
 
 const App: React.FC = () => {
   const [activated, setActivated] = useState(() => farmContextService.isActivated());
@@ -94,6 +77,20 @@ const App: React.FC = () => {
       }
     };
 
+    const isExpectedAbort = (reason: any) => {
+      const message = String(reason?.message || reason || '');
+      return reason?.name === 'AbortError' || /signal is aborted|request was aborted/i.test(message);
+    };
+
+    try {
+      const previousRuntimeError = localStorage.getItem('last_runtime_error');
+      if (previousRuntimeError && isExpectedAbort(previousRuntimeError)) {
+        localStorage.removeItem('last_runtime_error');
+      }
+    } catch {
+      // O diagnóstico antigo não deve impedir a inicialização.
+    }
+
     const onError = (event: ErrorEvent) => {
       persistLastError({
         type: 'error',
@@ -107,9 +104,14 @@ const App: React.FC = () => {
 
     const onUnhandledRejection = (event: PromiseRejectionEvent) => {
       const reason: any = (event as any).reason;
+      const message = String(reason?.message || reason || '');
+      if (isExpectedAbort(reason)) {
+        event.preventDefault?.();
+        return;
+      }
       persistLastError({
         type: 'unhandledrejection',
-        message: reason?.message || String(reason),
+        message,
         stack: reason?.stack
       });
     };
