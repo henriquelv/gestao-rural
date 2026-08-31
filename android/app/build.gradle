@@ -7,8 +7,8 @@ android {
         applicationId "com.gestaorural.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 17
-        versionName "1.0.16-risk-hardening-hotfix"
+        versionCode 18
+        versionName "1.0.17-export-pareto"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.

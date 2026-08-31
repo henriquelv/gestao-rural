@@ -8,13 +8,14 @@ import { db } from '../../services/db.service';
 import { notify } from '../../services/notification.service';
 import { DailyMilk, DailyMetric } from '../../types';
 import { PinRequestModal } from '../../components/PinRequestModal';
+import { SpreadsheetExportSheet } from '../../components/SpreadsheetExportSheet';
 import { authService } from '../../services/auth.service';
 import { farmContextService } from '../../services/farm-context.service';
 import { localdb } from '../../services/localdb';
 import { normalizeDailyMetric, normalizeDailyMilk } from '../../utils/record-normalize';
 import { getBusinessDateKey } from '../../utils/anomaly-months';
 import { buildMilkSummary } from '../../utils/milk-stats';
-import { exportCsv } from '../../services/export.service';
+import { exportCsv, exportXlsx } from '../../services/export.service';
 
 interface DataMetricScreenProps {
   type: 'milk' | 'lactation' | 'discard' | 'births';
@@ -40,6 +41,8 @@ export const DataMetricScreen: React.FC<DataMetricScreenProps> = ({ type }) => {
   const [isReplacing, setIsReplacing] = useState(false);
   const [pendingReplaceAction, setPendingReplaceAction] = useState<(() => Promise<void>) | null>(null);
   const [showMonthPicker, setShowMonthPicker] = useState(false);
+  const [showExportSheet, setShowExportSheet] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
   
   const MONTH_KEY = `selectedMonth_${farmContextService.getFarmId() || 'default'}`;
   const readSavedMonth = () => {
@@ -286,26 +289,64 @@ export const DataMetricScreen: React.FC<DataMetricScreenProps> = ({ type }) => {
 
   const dailyList = getDailyListData();
 
-  const exportCSV = async () => {
+  const exportData = async (format: 'xlsx' | 'csv') => {
+    if (isExporting || dailyList.length === 0) return;
+    setIsExporting(true);
     try {
-      const sorted = [...history].sort((a: any, b: any) => a.date > b.date ? 1 : -1);
+      const sorted = [...dailyList].sort((a, b) => a.fullDate.localeCompare(b.fullDate));
       const rows = [
         ['Data', conf.label, 'Unidade'],
-        ...sorted.map((d: any) => {
-          const val = type === 'milk' ? d.liters : d.value;
-          return [d.date, String(val ?? ''), conf.unit];
-        })
+        ...sorted.map((item) => [item.fullDate.split('-').reverse().join('/'), Number(item.rawValue || 0), conf.unit])
       ];
-      const result = await exportCsv(rows, `${conf.title}_${selectedMonth}`);
+      const total = sorted.reduce((sum, item) => sum + Number(item.rawValue || 0), 0);
+      const average = sorted.length > 0 ? total / sorted.length : 0;
+      const [year, month] = selectedMonth.split('-').map(Number);
+      const periodLabel = new Date(year, month - 1, 1).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+      const farmName = farmContextService.getContext()?.farm_name || 'Gestão Rural';
+      const subtitle = `${farmName} | ${periodLabel} | Total ${formatNumber(total)} ${conf.unit}${type === 'milk' ? ` | Média ${formatNumber(average)} ${conf.unit}/dia` : ''}`;
+      const sheets = [{
+        name: 'Registros',
+        title: conf.title,
+        subtitle,
+        columns: [
+          { header: 'Data', width: 15 },
+          { header: conf.label, width: 18, type: 'number' as const },
+          { header: 'Unidade', width: 12 }
+        ],
+        rows: rows.slice(1)
+      }];
+      if (type === 'milk') {
+        const annual = buildMilkSummary(history as DailyMilk[], year);
+        sheets.push({
+          name: 'Resumo anual',
+          title: `Resumo de Leite - ${year}`,
+          subtitle: `${farmName} | Total anual ${formatNumber(annual.yearStats.total)} L | Média ${formatNumber(annual.yearStats.average)} L/dia`,
+          columns: [
+            { header: 'Mês', width: 18 },
+            { header: 'Total (L)', width: 18, type: 'number' as const },
+            { header: 'Média (L/dia)', width: 20, type: 'number' as const },
+            { header: 'Dias registrados', width: 18, type: 'number' as const }
+          ],
+          rows: annual.months.map((item) => [item.label, item.total, item.average, item.days])
+        });
+      }
+      const result = format === 'xlsx'
+        ? await exportXlsx(sheets, `${conf.title}_${selectedMonth}`)
+        : await exportCsv(rows, `${conf.title}_${selectedMonth}`);
+      setShowExportSheet(false);
       notify(
-        result.native
-          ? `Arquivo salvo em Documentos/Gestao Rural/${result.fileName}`
-          : 'Arquivo compatível com Excel exportado com sucesso!',
+        result.native && result.notificationShown
+          ? `Planilha pronta. Toque na notificação para abrir ${result.fileName}.`
+          : result.native
+            ? `Planilha salva em ${result.location === 'downloads' ? 'Downloads' : 'Documentos'}/Gestao Rural/${result.fileName}.`
+            : 'Planilha exportada com sucesso!',
         'success'
       );
     } catch (e) {
-      console.error('Erro ao exportar CSV:', e);
-      notify('Erro ao exportar CSV.', 'error');
+      console.error('Erro ao exportar planilha:', e);
+      notify('Erro ao exportar planilha.', 'error');
+    } finally {
+      setIsExporting(false);
     }
   };
 
@@ -616,12 +657,13 @@ export const DataMetricScreen: React.FC<DataMetricScreenProps> = ({ type }) => {
                 </div>
                 {history.length > 0 && (
                   <button
-                    onClick={() => void exportCSV()}
-                    title="Exportar todos os dados para Excel"
+                    onClick={() => setShowExportSheet(true)}
+                    title="Baixar planilha do período"
+                    aria-label={`Baixar planilha de ${conf.title}`}
                     className="flex items-center gap-1 px-3 py-1 bg-green-50 border border-green-300 text-green-700 text-xs font-bold rounded-lg hover:bg-green-100 transition active:scale-95"
                   >
                     <Download size={13} />
-                    Excel
+                    Baixar
                   </button>
                 )}
             </h4>
@@ -816,6 +858,15 @@ export const DataMetricScreen: React.FC<DataMetricScreenProps> = ({ type }) => {
       )}
 
       {/* Modal de Confirmação de Substituição */}
+      <SpreadsheetExportSheet
+        open={showExportSheet}
+        count={dailyList.length}
+        busy={isExporting}
+        onClose={() => setShowExportSheet(false)}
+        onExcel={() => void exportData('xlsx')}
+        onCsv={() => void exportData('csv')}
+      />
+
       {isReplacing && (
         <div className="fixed inset-0 z-[70] bg-black/60 flex items-center justify-center p-4 animate-in fade-in">
           <div className="bg-white w-full max-w-md rounded-2xl shadow-2xl overflow-hidden">

@@ -6,10 +6,11 @@ import { localdb } from '../services/localdb';
 import { notify } from '../services/notification.service';
 import { Anomaly } from '../types';
 import { SectorType, DEFAULT_SECTOR_BASE_COLOR, SECTORS_LIST } from '../constants/sectors';
-import { Filter, TrendingUp, X, Calendar, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, FileSpreadsheet } from 'lucide-react';
-import { getAnomalyDateParts, getBusinessDateKey, groupAnomaliesByMonth, isAnomalyInDateRange } from '../utils/anomaly-months';
+import { Filter, TrendingUp, X, Calendar, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Download } from 'lucide-react';
+import { getAnomalyDateParts, groupAnomaliesByMonth, isAnomalyInDateRange } from '../utils/anomaly-months';
 import { buildAnomalyPareto } from '../utils/anomaly-pareto';
-import { exportCsv } from '../services/export.service';
+import { SpreadsheetExportSheet } from '../components/SpreadsheetExportSheet';
+import { AnomalyExportFormat, exportAnomalyReport } from '../services/anomaly-export.service';
 
 interface MonthData {
   month: string;
@@ -32,6 +33,7 @@ export const AnomalyQuantityScreen: React.FC = () => {
   const [selectedSector, setSelectedSector] = useState<SectorType | 'all'>('all');
   const [viewMode, setViewMode] = useState<ViewMode>('chart');
   const [isExporting, setIsExporting] = useState(false);
+  const [showExportSheet, setShowExportSheet] = useState(false);
   const [startDate, setStartDate] = useState(() => `${new Date().getFullYear()}-01-01`);
   const [endDate, setEndDate] = useState(() => {
     const now = new Date();
@@ -114,25 +116,23 @@ export const AnomalyQuantityScreen: React.FC = () => {
   const paretoData = buildAnomalyPareto(annualAnomalies);
   const paretoMax = Math.max(...paretoData.map((row) => row.count), 1);
 
-  const exportAnnualAnomalies = async () => {
+  const exportAnnualAnomalies = async (format: AnomalyExportFormat) => {
     if (isExporting || annualAnomalies.length === 0) return;
     setIsExporting(true);
     try {
-      const rows = [
-        ['Data', 'Setor', 'O que aconteceu', 'Solução imediata', 'Status'],
-        ...annualAnomalies.map((item) => [
-          getBusinessDateKey(item.createdAt).split('-').reverse().join('/') || String(item.createdAt || ''),
-          item.sector || 'Sem setor',
-          item.description || '',
-          item.immediateSolution || '',
-          item.resolvedAt ? 'Resolvida' : 'Pendente'
-        ])
-      ];
-      const result = await exportCsv(rows, `anomalias_pareto_${selectedYear}`);
+      const result = await exportAnomalyReport(
+        annualAnomalies,
+        `anomalias_pareto_${selectedYear}`,
+        format,
+        `Ano ${selectedYear}`
+      );
+      setShowExportSheet(false);
       notify(
-        result.native
-          ? `Arquivo salvo em Documentos/Gestao Rural/${result.fileName}`
-          : 'Dados do Pareto exportados para Excel.',
+        result.native && result.notificationShown
+          ? `Planilha pronta. Toque na notificação para abrir ${result.fileName}.`
+          : result.native
+            ? `Planilha salva em ${result.location === 'downloads' ? 'Downloads' : 'Documentos'}/Gestao Rural/${result.fileName}.`
+            : 'Dados do Pareto exportados.',
         'success'
       );
     } catch (error) {
@@ -480,13 +480,13 @@ export const AnomalyQuantityScreen: React.FC = () => {
               </div>
               <button
                 type="button"
-                onClick={() => void exportAnnualAnomalies()}
+                onClick={() => setShowExportSheet(true)}
                 disabled={isExporting || annualAnomalies.length === 0}
                 className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-700 disabled:opacity-50"
-                title="Exportar dados do ano para Excel"
-                aria-label="Exportar dados do Pareto para Excel"
+                title="Baixar planilha do Pareto"
+                aria-label="Baixar planilha do Pareto"
               >
-                <FileSpreadsheet size={19} />
+                <Download size={19} />
               </button>
             </div>
 
@@ -575,6 +575,14 @@ export const AnomalyQuantityScreen: React.FC = () => {
           </ul>
         </div>
       </div>
+      <SpreadsheetExportSheet
+        open={showExportSheet}
+        count={annualAnomalies.length}
+        busy={isExporting}
+        onClose={() => setShowExportSheet(false)}
+        onExcel={() => void exportAnnualAnomalies('xlsx')}
+        onCsv={() => void exportAnnualAnomalies('csv')}
+      />
     </Layout>
   );
 };

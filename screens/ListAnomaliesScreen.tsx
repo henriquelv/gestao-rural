@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Filter, X, Image as ImageIcon, Video, Calendar, User, LayoutGrid, List as ListIcon, Table as TableIcon, ArrowUpDown, ArrowUp, ArrowDown, CheckCircle, AlertTriangle, RefreshCw, FileSpreadsheet } from 'lucide-react';
+import { Filter, X, Image as ImageIcon, Video, Calendar, User, LayoutGrid, List as ListIcon, Table as TableIcon, ArrowUpDown, ArrowUp, ArrowDown, CheckCircle, AlertTriangle, RefreshCw, Download } from 'lucide-react';
 import { Layout } from '../components/Layout';
 import { Header } from '../components/Header';
 import { Anomaly, MediaItem } from '../types';
@@ -11,7 +11,8 @@ import { notify } from '../services/notification.service';
 import { SECTORS_LIST, SectorType, getSectorColors } from '../constants/sectors';
 import { mediaService } from '../services/media.service';
 import { getAnomalyDate, getAnomalyTime, getBusinessDateKey, isAnomalyInDateRange } from '../utils/anomaly-months';
-import { exportCsv } from '../services/export.service';
+import { SpreadsheetExportSheet } from '../components/SpreadsheetExportSheet';
+import { AnomalyExportFormat, exportAnomalyReport } from '../services/anomaly-export.service';
 
 // Responsáveis são derivados dos dados atuais para manter filtros atualizados
 
@@ -58,6 +59,7 @@ export const ListAnomaliesScreen: React.FC = () => {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [visibleLimit, setVisibleLimit] = useState(PAGE_SIZE);
   const [isExporting, setIsExporting] = useState(false);
+  const [showExportSheet, setShowExportSheet] = useState(false);
   const loadingRef = useRef(false);
   const loadQueuedRef = useRef(false);
   const mountedRef = useRef(false);
@@ -205,26 +207,19 @@ export const ListAnomaliesScreen: React.FC = () => {
   const activeFiltersCount = filterSectors.length + (filterResponsible ? 1 : 0) + (filterPeriod !== 'all' ? 1 : 0) + (filterResolved !== 'all' ? 1 : 0);
   const visibleItems = useMemo(() => filteredItems.slice(0, visibleLimit), [filteredItems, visibleLimit]);
 
-  const exportForExcel = async () => {
+  const exportReport = async (format: AnomalyExportFormat) => {
     if (isExporting || filteredItems.length === 0) return;
     setIsExporting(true);
     try {
-      const rows = [
-        ['Data', 'Setor', 'O que aconteceu', 'Solução imediata', 'Status'],
-        ...filteredItems.map((item) => [
-          getAnomalyDate(item.createdAt)?.toLocaleDateString('pt-BR') || String(item.createdAt || ''),
-          item.sector || 'Sem setor',
-          item.description || '',
-          item.immediateSolution || '',
-          item.resolvedAt ? 'Resolvida' : 'Pendente'
-        ])
-      ];
       const dateKey = getBusinessDateKey(new Date());
-      const result = await exportCsv(rows, `anomalias_${dateKey}`);
+      const result = await exportAnomalyReport(filteredItems, `anomalias_${dateKey}`, format, 'Filtros atuais');
+      setShowExportSheet(false);
       notify(
-        result.native
-          ? `${filteredItems.length} anomalias salvas em Documentos/Gestao Rural/${result.fileName}`
-          : `${filteredItems.length} anomalias exportadas para Excel.`,
+        result.native && result.notificationShown
+          ? `Planilha pronta. Toque na notificação para abrir ${result.fileName}.`
+          : result.native
+            ? `Planilha salva em ${result.location === 'downloads' ? 'Downloads' : 'Documentos'}/Gestao Rural/${result.fileName}.`
+            : `${filteredItems.length} anomalias exportadas.`,
         'success'
       );
     } catch (error) {
@@ -265,13 +260,13 @@ export const ListAnomaliesScreen: React.FC = () => {
             </button>
             <button
               type="button"
-              onClick={() => void exportForExcel()}
+              onClick={() => setShowExportSheet(true)}
               disabled={isExporting || filteredItems.length === 0}
               className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg border-2 border-emerald-200 bg-emerald-50 text-emerald-700 disabled:opacity-50"
-              title="Exportar anomalias filtradas para Excel"
-              aria-label="Exportar anomalias para Excel"
+              title="Baixar planilha de anomalias"
+              aria-label="Baixar planilha de anomalias"
             >
-              <FileSpreadsheet size={19} />
+              <Download size={19} />
             </button>
             <button
               type="button"
@@ -479,6 +474,15 @@ export const ListAnomaliesScreen: React.FC = () => {
       </div>
 
       {/* FILTER MODAL */}
+      <SpreadsheetExportSheet
+        open={showExportSheet}
+        count={filteredItems.length}
+        busy={isExporting}
+        onClose={() => setShowExportSheet(false)}
+        onExcel={() => void exportReport('xlsx')}
+        onCsv={() => void exportReport('csv')}
+      />
+
       {showFilters && (
         <div className="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center animate-in fade-in">
           <div className="bg-white w-full max-w-md p-6 rounded-t-2xl sm:rounded-xl shadow-2xl animate-in slide-in-from-bottom max-h-[90vh] overflow-y-auto">

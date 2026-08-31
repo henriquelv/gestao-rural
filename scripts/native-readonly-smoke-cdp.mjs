@@ -141,10 +141,23 @@ try {
   }
 
   await evaluate(send, `(() => { location.hash = '#/anomalies/list'; return true; })()`);
-  await waitFor(send, `document.querySelector('[aria-label="Exportar anomalias para Excel"]') !== null`);
+  await waitFor(send, `document.querySelector('[aria-label="Baixar planilha de anomalias"]') !== null`);
+  await evaluate(send, `(() => {
+    document.querySelector('[aria-label="Baixar planilha de anomalias"]')?.click();
+    return true;
+  })()`);
+  await waitFor(send, `document.body.innerText.toUpperCase().includes('EXCEL COMPLETO') && document.body.innerText.includes('CSV')`);
   const anomalyExport = await evaluate(send, `(() => {
-    const button = document.querySelector('[aria-label="Exportar anomalias para Excel"]');
-    return { visible: Boolean(button), disabled: Boolean(button?.disabled) };
+    const button = document.querySelector('[aria-label="Baixar planilha de anomalias"]');
+    const dialog = document.querySelector('[role="dialog"][aria-label="Baixar planilha"]');
+    const result = {
+      visible: Boolean(button),
+      disabled: Boolean(button?.disabled),
+      excelOption: Boolean(dialog?.innerText.toUpperCase().includes('EXCEL COMPLETO')),
+      csvOption: Boolean(dialog?.innerText.includes('CSV'))
+    };
+    dialog?.querySelector('[aria-label="Fechar"]')?.click();
+    return result;
   })()`);
 
   await evaluate(send, `(() => { location.hash = '#/anomalies/quantity'; return true; })()`);
@@ -165,7 +178,7 @@ try {
   await waitFor(send, `document.body.innerText.toUpperCase().includes('PARETO POR SETOR')`);
   const pareto = await evaluate(send, `(() => ({
     visible: document.body.innerText.toUpperCase().includes('PARETO POR SETOR'),
-    hasExport: document.querySelector('[aria-label="Exportar dados do Pareto para Excel"]') !== null,
+    hasExport: document.querySelector('[aria-label="Baixar planilha do Pareto"]') !== null,
     hasCumulative: document.body.innerText.toUpperCase().includes('ACUMULADO')
   }))()`);
 
