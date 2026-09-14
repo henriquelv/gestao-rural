@@ -150,6 +150,7 @@ const metadataTables = new Set([
   'farm_monthly_stats'
 ]);
 const deletionAwareTables = new Set(['appointments', 'fuelings', 'anomalies', 'instructions', 'notices', 'improvements', 'farm_docs']);
+const alwaysFreshTables = new Set(['employees']);
 const smartReadHydratedKeys = new Set<string>();
 
 const localRecordId = (tableName: string, row: any) => {
@@ -438,8 +439,9 @@ async function smartRead<T>(tableName: string, fallbackData: T[], orderByField?:
       serverSyncAttempted = true;
       smartReadHydratedKeys.add(hydrationKey); // marca antes do async para evitar dupla chamada
       clearLastRefresh(tableName);
-      if (localData.length === 0) {
-        // Sem cache: bloqueia e espera servidor para não renderizar vazio
+      if (localData.length === 0 || alwaysFreshTables.has(tableName)) {
+        // Sem cache, ou tabela pequena/crítica como funcionários: espera servidor
+        // para não renderizar lista antiga quando outro aparelho cadastrou alguém.
         await refreshFromServer(tableName);
         localData = await readLocal();
       } else {
@@ -575,7 +577,7 @@ async function migrateRaspagemToConforto() {
 // Ocorre quando o app trava entre a escrita local e a escrita no outbox.
 // Os registros ficam visíveis localmente mas nunca sobem pro servidor.
 async function recoverOrphanedRecords(): Promise<void> {
-  const tables = ['appointments', 'fuelings', 'anomalies', 'instructions', 'notices', 'improvements', 'farm_docs',
+  const tables = ['employees', 'appointments', 'fuelings', 'anomalies', 'instructions', 'notices', 'improvements', 'farm_docs',
     'daily_metrics', 'milk_daily'];
   try {
     const pending = await localdb.getPendingOutbox();
@@ -722,6 +724,7 @@ async function migrateLocalIds(): Promise<void> {
     }
 
     const legacyTables = [
+      'employees',
       'anomalies',
       'instructions',
       'notices',

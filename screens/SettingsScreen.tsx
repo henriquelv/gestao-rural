@@ -304,6 +304,18 @@ export const SettingsScreen: React.FC = () => {
     }
   };
 
+  useEffect(() => {
+    const reload = () => {
+      void loadRegistries();
+    };
+    const unsubscribeEmployees = localdb.subscribe('employees', reload);
+    const unsubscribeSectors = localdb.subscribe('sectors', reload);
+    return () => {
+      unsubscribeEmployees();
+      unsubscribeSectors();
+    };
+  }, []);
+
   const loadUI = async () => {
     setUiConfig(await db.getUIConfig());
   };
@@ -473,8 +485,13 @@ export const SettingsScreen: React.FC = () => {
   };
 
   const handleSaveEmp = async () => {
+    const currentFarmId = farmContextService.getFarmId();
     const normalizedName = empName.trim();
     if (!normalizedName) { notify("Preencha o nome.", "error"); return; }
+    if (!currentFarmId || currentFarmId === 'owner') {
+      notify("Use o Painel Admin para cadastrar funcionário em uma fazenda.", "error");
+      return;
+    }
     if (!/^\d{4}$/.test(empAccessPin)) { notify("A senha deve ter 4 números.", "error"); return; }
     const duplicate = employees.some((employee) => employee.id !== editingEmp?.id
       && employee.name.trim().toLocaleLowerCase('pt-BR') === normalizedName.toLocaleLowerCase('pt-BR'));
@@ -490,15 +507,19 @@ export const SettingsScreen: React.FC = () => {
 
     protectedAction(async () => {
       try {
+        const now = new Date().toISOString();
         const newEmp: Employee = {
           id: editingEmp ? editingEmp.id : createId('employee'),
+          farm_id: currentFarmId,
           name: normalizedName,
           role: empRole || 'Técnico',
           is_admin: willBeAdmin,
           access_pin: empAccessPin,
           admin_pin: willBeAdmin ? empAccessPin : undefined,
           photoUri: empPhoto,
-          status: editingEmp?.status || 'active'
+          status: editingEmp?.status || 'active',
+          created_at: editingEmp?.created_at || now,
+          updated_at: now
         };
 
         if (editingEmp) {
@@ -518,6 +539,11 @@ export const SettingsScreen: React.FC = () => {
           await db.addEmployee(newEmp);
         }
 
+        if (navigator.onLine) {
+          await db.syncPendingData();
+          await db.forceRefreshTable('employees');
+        }
+        await loadRegistries();
         handleClearEmpForm();
         notify("Funcionário salvo!", "success");
       } catch (e) {
