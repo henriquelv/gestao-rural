@@ -16,4 +16,4 @@ export const APP_ENVIRONMENT = {
 
 // Os módulos continuam implementados e com suas rotas preservadas em App.tsx.
 // Para reexibir um deles no futuro, basta adicioná-lo a esta lista.
-export const VISIBLE_HOME_ROUTES = ['/anomalies', '/agenda', '/fuelings', '/farm-indicators', '/rural-management', '/notices', '/settings'] as const;
+export const VISIBLE_HOME_ROUTES = ['/anomalies', '/agenda', '/fuelings', '/farm-indicators', '/notices', '/settings'] as const;

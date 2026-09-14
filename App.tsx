@@ -1,5 +1,5 @@
 import React, { Suspense, useEffect, useState } from 'react';
-import { HashRouter, Routes, Route } from 'react-router-dom';
+import { HashRouter, Navigate, Routes, Route } from 'react-router-dom';
 import { Capacitor } from '@capacitor/core';
 import { App as CapApp } from '@capacitor/app';
 import { HomeScreen } from './screens/HomeScreen';
@@ -342,7 +342,7 @@ const App: React.FC = () => {
         <Route path="/anomalies/clients" element={<ClientDashboardScreen />} />
         <Route path="/anomalies/insights" element={<RuminaInsightsScreen mode="farm" />} />
         <Route path="/farm-indicators" element={<RuminaInsightsScreen mode="farm" />} />
-        <Route path="/rural-management" element={<AdminGuard><RuminaInsightsScreen mode="management" /></AdminGuard>} />
+        <Route path="/rural-management" element={<Navigate to="/farm-indicators" replace />} />
 
         {/* Comunicados: ADICIONAR LIVRE */}
         <Route path="/notices" element={<NoticesMenuScreen />} />

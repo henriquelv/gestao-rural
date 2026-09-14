@@ -12,7 +12,6 @@ import {
   RefreshCw,
   Settings,
   ShieldCheck,
-  Sprout,
   Fuel,
   ChartNoAxesCombined,
   UserRound
@@ -32,9 +31,8 @@ const HOME_BUTTON_FALLBACK: UIBlock[] = [
   { id: 'home-agenda', screen: 'home', type: 'button', label: 'AGENDA', color: 'green', iconType: 'lucide', iconValue: 'calendar', route: '/agenda', order: 2, visible: true },
   { id: 'home-fuelings', screen: 'home', type: 'button', label: 'ABASTECIMENTOS', color: 'yellow', iconType: 'lucide', iconValue: 'fuel', route: '/fuelings', order: 3, visible: true },
   { id: 'home-farm-indicators', screen: 'home', type: 'button', label: 'INDICADORES DA FAZENDA', color: 'green', iconType: 'lucide', iconValue: 'chart', route: '/farm-indicators', order: 4, visible: true },
-  { id: 'home-rural-management', screen: 'home', type: 'button', label: 'GESTÃO CAMPO LEGADO', color: 'green', iconType: 'lucide', iconValue: 'sprout', route: '/rural-management', order: 5, visible: true },
-  { id: 'home-notices', screen: 'home', type: 'button', label: 'COMUNICADOS', color: 'green', iconType: 'lucide', iconValue: 'megaphone', route: '/notices', order: 6, visible: true },
-  { id: 'home-settings', screen: 'home', type: 'button', label: 'CONFIGURAÇÕES', color: 'gray', iconType: 'lucide', iconValue: 'settings', route: '/settings', order: 7, visible: true }
+  { id: 'home-notices', screen: 'home', type: 'button', label: 'COMUNICADOS', color: 'green', iconType: 'lucide', iconValue: 'megaphone', route: '/notices', order: 5, visible: true },
+  { id: 'home-settings', screen: 'home', type: 'button', label: 'CONFIGURAÇÕES', color: 'gray', iconType: 'lucide', iconValue: 'settings', route: '/settings', order: 6, visible: true }
 ];
 
 const MODULE_DETAILS: Record<string, {
@@ -59,7 +57,7 @@ const MODULE_DETAILS: Record<string, {
     icon: Megaphone,
     cardClass: 'bg-[#dbe7cf] text-[#173d31] border-[#b9cbaa]',
     iconClass: 'bg-[#315f45] text-white',
-    number: '06'
+    number: '05'
   },
   '/fuelings': {
     title: 'Abastecimentos',
@@ -77,14 +75,6 @@ const MODULE_DETAILS: Record<string, {
     iconClass: 'bg-[#315f45] text-white',
     number: '04'
   },
-  '/rural-management': {
-    title: 'Gestão Campo Legado',
-    description: 'Compare o conglomerado das fazendas atendidas e acompanhe médias da operação.',
-    icon: Sprout,
-    cardClass: 'bg-[#cfe0c7] text-[#173d31] border-[#a9c09f]',
-    iconClass: 'bg-[#1f5a40] text-white',
-    number: '05'
-  },
   '/agenda': {
     title: 'Agenda de visitas',
     description: 'Organize clientes e responsáveis por manhã e tarde, mesmo sem internet.',
@@ -99,7 +89,7 @@ const MODULE_DETAILS: Record<string, {
     icon: Settings,
     cardClass: 'bg-[#e7dfd1] text-[#2f4038] border-[#c8bdab]',
     iconClass: 'bg-[#624d3f] text-white',
-    number: '07'
+    number: '06'
   }
 };
 
@@ -147,7 +137,7 @@ export const HomeScreen: React.FC = () => {
   const configuredHomeButtons = ui?.buttons?.filter((button) => button.screen === 'home') || [];
   const homeButtons = HOME_BUTTON_FALLBACK
     .map((fallback) => configuredHomeButtons.find((button) => button.route === fallback.route) || fallback)
-    .filter((button) => button.screen === 'home' && visibleRoutes.includes(button.route) && ((button.route !== '/settings' && button.route !== '/rural-management') || isAdmin))
+    .filter((button) => button.screen === 'home' && visibleRoutes.includes(button.route) && (button.route !== '/settings' || isAdmin))
     .sort((a, b) => visibleRoutes.indexOf(a.route) - visibleRoutes.indexOf(b.route));
 
   const syncPresentation = !isSupabaseConfigured

@@ -133,7 +133,9 @@ export const RuminaInsightsScreen:React.FC<{mode?:'farm'|'management'}>=({mode='
 
   const loadFarms=useCallback(async()=>{
     const applyFarms=(result:{farms:RuminaFarm[]})=>{
-      const availableFarms=mode==='management'?result.farms.filter(f=>f.isAggregate):result.farms.filter(f=>!f.isAggregate);
+      // Para administradores, a API devolve também a empresa consolidada.
+      // Ela fica no mesmo seletor das fazendas; técnicos recebem apenas fazendas.
+      const availableFarms=mode==='management'?result.farms.filter(f=>f.isAggregate):result.farms;
       setFarms(availableFarms);
       const latest=[...availableFarms].filter(f=>!f.isAggregate).sort((a,b)=>(b.lastProcessedAt||'').localeCompare(a.lastProcessedAt||''))[0];
       const consolidated=result.farms.find(f=>f.isAggregate);
@@ -158,7 +160,7 @@ export const RuminaInsightsScreen:React.FC<{mode?:'farm'|'management'}>=({mode='
     const cached=ruminaInsightsService.getCachedDashboard(id,count,end);
     if(cached)setData(cached);
     const savedAt=cached?.cache?.savedAt?new Date(cached.cache.savedAt).getTime():0;
-    const freshFor=mode==='management'?30*60_000:10*60_000;
+    const freshFor=id==='__all__'?30*60_000:10*60_000;
     if(!refresh&&savedAt&&Date.now()-savedAt<freshFor){lastRefresh.current=savedAt;setLoading(false);setError('');return;}
     const request=++requestId.current;dashboardRequestInFlight.current=requestKey;setLoading(true);setError('');
     try{
@@ -173,7 +175,7 @@ export const RuminaInsightsScreen:React.FC<{mode?:'farm'|'management'}>=({mode='
     if(!farmId)return;
     const refreshIfDue=(force=false)=>{
       if(document.visibilityState==='hidden'||!navigator.onLine)return;
-      const refreshInterval=mode==='management'?30*60_000:10*60_000;
+      const refreshInterval=farmId==='__all__'?30*60_000:10*60_000;
       if(force||Date.now()-lastRefresh.current>=refreshInterval)void load(farmId,months,endMonth,force);
     };
     const onVisibility=()=>refreshIfDue(false);
@@ -208,11 +210,11 @@ export const RuminaInsightsScreen:React.FC<{mode?:'farm'|'management'}>=({mode='
       <div className="bi-intro"><div><p className="bi-eyebrow">Campo Legado Consultoria</p><h1>{mode==='management'?'Gestão Campo Legado':'Indicadores da Fazenda'}</h1><p className="bi-intro-copy">{mode==='management'?'Comparativo consolidado de todas as fazendas atendidas.':'Rebanho, produção, reprodução, saúde e financeiro por fazenda.'}</p></div><button type="button" className="bi-icon-button" aria-label="Atualizar indicadores" onClick={retry} disabled={loading||loadingFarms}><RefreshCw size={18} className={loading||loadingFarms?'animate-spin':''} /></button></div>
       <section className="bi-filter" aria-label="Filtros do painel">
         <label>{mode==='management'?'Visão':'Fazenda'}</label>
-        {mode==='management'?<div className="bi-locked-view"><strong>Gestão Campo Legado</strong><span>{selectedFarm?.farmCount||0} fazendas consolidadas</span></div>:<SearchableSelect value={farmId} options={farms.map(f=>({value:f.id,label:f.name,description:`Atualizada em ${dateLabel(f.lastProcessedAt)}`}))} onChange={setFarmId} placeholder={loadingFarms?'Carregando fazendas…':'Buscar fazenda'} searchPlaceholder="Digite o nome da fazenda" disabled={loadingFarms} />}
+        {mode==='management'?<div className="bi-locked-view"><strong>Gestão Campo Legado</strong><span>{selectedFarm?.farmCount||0} fazendas consolidadas</span></div>:<SearchableSelect value={farmId} options={farms.map(f=>({value:f.id,label:f.name,description:f.isAggregate?`${f.farmCount||0} fazendas consolidadas · visão administrativa`:`Atualizada em ${dateLabel(f.lastProcessedAt)}`}))} onChange={setFarmId} placeholder={loadingFarms?'Carregando fazendas…':'Buscar fazenda ou empresa'} searchPlaceholder="Digite o nome da fazenda ou empresa" disabled={loadingFarms} />}
         <div className="bi-filter-actions"><div className="bi-periods" aria-label="Período rápido">{[3,6,12].map(count=><button type="button" key={count} aria-pressed={months===count&&endMonth===currentMonth()} onClick={()=>{setMonths(count);setEndMonth(currentMonth());setDraftStart(periodStart(currentMonth(),count));setDraftEnd(currentMonth());}}>{count} meses</button>)}</div><button type="button" className="bi-filter-toggle" aria-label="Escolher período personalizado" aria-expanded={filtersOpen} onClick={()=>{setDraftStart(periodStart(endMonth,months));setDraftEnd(endMonth);setFiltersOpen(!filtersOpen);}}><SlidersHorizontal size={17} /></button></div>
         {filtersOpen&&<form className="bi-custom-period" onSubmit={applyDates}><div className="bi-date-grid"><label>De<input type="month" value={draftStart} min="2000-01" max={draftEnd} required onChange={e=>setDraftStart(e.target.value)} /></label><label>Até<input type="month" value={draftEnd} min={draftStart} max={currentMonth()} required onChange={e=>setDraftEnd(e.target.value)} /></label></div>{filterError&&<p role="alert" className="bi-muted">{filterError}</p>}<button className="bi-primary" type="submit">Aplicar período</button></form>}
       </section>
-      <div className="bi-farm-caption"><span><CalendarDays size={13} />{monthLabel(periodStart(endMonth,months))} — {monthLabel(endMonth)}</span><span className="bi-farm-count">{mode==='management'?`${selectedFarm?.farmCount||0} fazendas`:`${farms.length} disponíveis`}</span></div>
+      <div className="bi-farm-caption"><span><CalendarDays size={13} />{monthLabel(periodStart(endMonth,months))} — {monthLabel(endMonth)}</span><span className="bi-farm-count">{selectedFarm?.isAggregate?`${selectedFarm.farmCount||0} fazendas consolidadas`:`${farms.filter(f=>!f.isAggregate).length} fazendas disponíveis`}</span></div>
       <nav className="bi-tabs" aria-label="Áreas do painel">{TABS.map(({id,label,icon:Icon})=><button type="button" key={id} aria-pressed={tab===id} onClick={()=>setTab(id)}><Icon size={16} /><span>{label}</span></button>)}</nav>
       {error&&<div role="alert" className="bi-notice">{error}<button type="button" onClick={retry}>Tentar novamente</button></div>}
       {!loadingFarms&&!farms.length&&!error&&<p className="bi-notice">Nenhuma fazenda disponível nesta conta.</p>}
