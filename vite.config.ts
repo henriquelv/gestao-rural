@@ -18,9 +18,9 @@ const offlineServiceWorker = () => ({
       '/',
       '/index.html',
       '/manifest.webmanifest',
-      '/icons/icon-192.png',
-      '/icons/icon-512.png',
-      '/brand/campo-legado-logo.jpg',
+      '/icons/campo-legado-v2-192.png',
+      '/icons/campo-legado-v2-512.png',
+      '/brand/campo-legado-logo-v2.png',
       // O banco SQLite é exclusivo do APK. Não fazê-lo baixar no navegador reduz
       // o custo da instalação PWA sem afetar o modo offline da versão web.
       ...generatedFiles.map((file) => `/${file}`)

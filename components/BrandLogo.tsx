@@ -17,11 +17,11 @@ export const BrandLogo: React.FC<BrandLogoProps> = ({
   return (
     <div className={`flex items-center ${compact ? 'gap-2' : 'gap-3'} ${className}`}>
       {!imageFailed && (
-        <div className={`${compact ? 'h-10 w-24' : 'h-14 w-32'} relative overflow-hidden rounded-md ${inverse ? 'bg-white' : ''}`}>
+        <div className={`${compact ? 'h-10 w-24' : 'h-14 w-32'} overflow-hidden rounded-md ${inverse ? 'bg-white' : ''}`}>
           <img
             src={APP_BRAND.logoUri}
             alt="Campo Legado Consultoria"
-            className={`${compact ? 'h-24 w-24' : 'h-32 w-32'} absolute left-1/2 top-1/2 max-w-none -translate-x-1/2 -translate-y-1/2 object-contain`}
+            className="h-full w-full object-contain"
             onError={() => setImageFailed(true)}
           />
         </div>

@@ -4,7 +4,7 @@ export const APP_BRAND = {
   fullName: 'Campo Legado Consultoria',
   appName: 'Gestão Rural Campo Legado',
   tagline: 'Tradição que ensina, inovação que transforma.',
-  logoUri: '/brand/campo-legado-logo.jpg'
+  logoUri: '/brand/campo-legado-logo-v2.png'
 } as const;
 
 export const APP_ENVIRONMENT = {
