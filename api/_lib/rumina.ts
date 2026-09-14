@@ -29,18 +29,30 @@ const post = async <T extends Record<string, unknown>>(
   timeoutMs = 25_000
 ): Promise<RuminaEnvelope<T>> => {
   const { apiKey } = credentials();
-  const response = await fetch(`${RUMINA_BASE_URL}/${endpoint}`, {
-    method: 'POST',
-    headers: {
-      Accept: 'application/json',
-      Authorization: apiKey,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(timeoutMs)
-  });
-  if (!response.ok) throw new Error(`RUMINA_${endpoint.toUpperCase()}_${response.status}`);
-  return response.json() as Promise<RuminaEnvelope<T>>;
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const response = await fetch(`${RUMINA_BASE_URL}/${endpoint}`, {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          Authorization: apiKey,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(timeoutMs)
+      });
+      if (response.ok) return response.json() as Promise<RuminaEnvelope<T>>;
+      const transient = response.status === 429 || response.status >= 500;
+      if (!transient || attempt === 1) throw new Error(`RUMINA_${endpoint.toUpperCase()}_${response.status}`);
+      lastError = new Error(`RUMINA_${endpoint.toUpperCase()}_${response.status}`);
+    } catch (error) {
+      lastError = error;
+      if (attempt === 1) throw error;
+    }
+    await new Promise(resolve => setTimeout(resolve, 350 * (attempt + 1)));
+  }
+  throw lastError instanceof Error ? lastError : new Error(`RUMINA_${endpoint.toUpperCase()}_UNAVAILABLE`);
 };
 
 export const listRuminaFarms = async (): Promise<RuminaFarm[]> => {
@@ -72,10 +84,14 @@ export const fetchRuminaDataset = async (
     for (let index = 0; index < farmCodes.length; index += batchSize) {
       batches.push(farmCodes.slice(index, index + batchSize));
     }
-    const results = await Promise.all(batches.map((batch) => fetchRuminaDataset(endpoint, batch.map(String), period)));
+    const results = await Promise.allSettled(batches.map((batch) => fetchRuminaDataset(endpoint, batch.map(String), period)));
+    const available = results.filter((result): result is PromiseFulfilledResult<{ rows: Record<string, unknown>[]; truncated: boolean }> => result.status === 'fulfilled');
+    if (!available.length) throw new Error(`RUMINA_${endpoint.toUpperCase()}_UNAVAILABLE`);
     return {
-      rows: results.flatMap((result) => result.rows),
-      truncated: results.some((result) => result.truncated)
+      rows: available.flatMap((result) => result.value.rows),
+      // Uma falha isolada nao apaga os demais lotes: o painel mostra a fonte
+      // como parcial e a proxima atualizacao tenta completar o resultado.
+      truncated: available.some((result) => result.value.truncated) || available.length !== results.length
     };
   }
   const allowedFarms=new Set(farmCodes);

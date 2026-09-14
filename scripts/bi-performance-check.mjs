@@ -29,11 +29,13 @@ assert.ok(selected);
 const endMonth = new Date().toISOString().slice(0, 7);
 const farmFresh = await timedJson(`${base}/api/rumina/dashboard?farmId=${selected.id}&months=6&endMonth=${endMonth}&refresh=1`);
 const farmWarm = await timedJson(`${base}/api/rumina/dashboard?farmId=${selected.id}&months=6&endMonth=${endMonth}`);
+const managementFresh = await timedJson(`${base}/api/rumina/dashboard?farmId=__all__&months=3&endMonth=${endMonth}&refresh=1`);
 const managementWarm = await timedJson(`${base}/api/rumina/dashboard?farmId=__all__&months=3&endMonth=${endMonth}`);
 console.log(JSON.stringify({
   farmsSeconds: farms.seconds,
   farmFreshSeconds: farmFresh.seconds,
   farmWarmSeconds: farmWarm.seconds,
+  managementFreshSeconds: managementFresh.seconds,
   managementWarmSeconds: managementWarm.seconds,
   farmStatus: farmFresh.status,
   managementStatus: managementWarm.status
