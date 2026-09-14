@@ -1,6 +1,7 @@
 {
   "name": "Gestão Rural — Campo Legado Consultoria",
   "short_name": "Campo Legado",
+  "id": "/#/",
   "description": "Ordens de serviço e comunicados da Campo Legado Consultoria.",
   "lang": "pt-BR",
   "start_url": "/#/",
@@ -11,28 +12,16 @@
   "theme_color": "#173f32",
   "icons": [
     {
-      "src": "/icons/campo-legado-v2-192.png",
+      "src": "/icons/campo-legado-v2-192.png?v=3",
       "type": "image/png",
       "sizes": "192x192",
       "purpose": "any"
     },
     {
-      "src": "/icons/campo-legado-v2-512.png",
+      "src": "/icons/campo-legado-v2-512.png?v=3",
       "type": "image/png",
       "sizes": "512x512",
       "purpose": "any"
-    },
-    {
-      "src": "/icons/campo-legado-v2-192.png",
-      "type": "image/png",
-      "sizes": "192x192",
-      "purpose": "maskable"
-    },
-    {
-      "src": "/icons/campo-legado-v2-512.png",
-      "type": "image/png",
-      "sizes": "512x512",
-      "purpose": "maskable"
     }
   ]
 }
