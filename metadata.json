@@ -1,6 +1,6 @@
 {
-  "name": "Gestão Rural Simples",
-  "description": "Aplicativo intuitivo para registro de anomalias e gestão de fazenda, focado em simplicidade e acessibilidade.",
+  "name": "Gestão Rural Campo Legado Consultoria",
+  "description": "Aplicativo da Campo Legado Consultoria para ordens de serviço, visitas e comunicados da equipe.",
   "requestFramePermissions": [
     "camera",
     "microphone"

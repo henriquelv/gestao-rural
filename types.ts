@@ -23,6 +23,7 @@ export interface MediaItem {
   remoteUrl?: string;
   uri?: string;
   pendingUpload?: boolean;
+  purpose?: 'client_signature';
 }
 
 export interface Farm {
@@ -71,7 +72,9 @@ export interface AppActivationContext {
   device_status?: string;
   grace_period_days?: number;
   is_owner?: boolean;
+  is_admin?: boolean;
   admin_pin?: string;
+  employee_role?: string;
 }
 
 export interface FarmSettings {
@@ -117,7 +120,31 @@ export interface Anomaly {
   farm_id?: string;
   employee_id?: string;
   employee_name?: string;
+  createdByEmployeeId?: string;
+  createdByEmployeeName?: string;
+  technicianId?: string;
+  recordType?: 'service_order' | 'anomaly';
   createdAt: string;
+  serviceDate?: string;
+  clientName?: string;
+  serviceOrderType?: 'receita' | 'despesa';
+  projectValue?: number;
+  visitValue?: number;
+  kmQuantity?: number;
+  kmUnitValue?: number;
+  kmValue?: number;
+  additionalExpenseValue?: number;
+  additionalExpenseDescription?: string;
+  paymentStatus?: 'a_receber' | 'recebido' | null;
+  location?: {
+    latitude: number;
+    longitude: number;
+    accuracy?: number;
+    capturedAt: string;
+    address?: string;
+    addressCapturedAt?: string;
+    addressProvider?: 'OpenStreetMap';
+  };
   responsible: string;
   sector: string; 
   description: string;
@@ -206,10 +233,67 @@ export interface Employee {
   photoUri?: string;
   is_admin?: boolean;
   admin_pin?: string;
+  access_pin?: string;
+}
+
+export interface Client {
+  id: string;
+  farm_id?: string;
+  name: string;
+  status?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export type AppointmentPeriod = 'morning' | 'afternoon' | 'full_day';
+export type AppointmentStatus = 'scheduled' | 'completed' | 'cancelled';
+
+export interface Appointment {
+  id: string;
+  farm_id?: string;
+  employee_id: string;
+  employee_name: string;
+  device_id?: string;
+  clientId?: string;
+  clientName: string;
+  date: string;
+  period: AppointmentPeriod;
+  status: AppointmentStatus;
+  activity: string;
+  locationNote?: string;
+  notes?: string;
+  createdByEmployeeId?: string;
+  createdByEmployeeName?: string;
+  createdAt: string;
+  updated_at?: string;
+}
+
+export interface Fueling {
+  id: string;
+  farm_id?: string;
+  employee_id?: string;
+  employee_name?: string;
+  device_id?: string;
+  vehicle: string;
+  date: string;
+  time: string;
+  odometer: number;
+  fuelType: 'gasolina_comum' | 'gasolina_aditivada' | 'etanol' | 'diesel_s10' | 'diesel_s500' | 'outro';
+  pricePerLiter: number;
+  totalValue: number;
+  liters: number;
+  fullTank: boolean;
+  station?: string;
+  driverId?: string;
+  driverName: string;
+  notes?: string;
+  createdAt: string;
+  updated_at?: string;
 }
 
 export type RootStackParamList = {
   Home: undefined;
+  Agenda: undefined;
   AnomaliesMenu: undefined;
   AddAnomaly: { fixedTimestamp: string };
   ListAnomalies: undefined;

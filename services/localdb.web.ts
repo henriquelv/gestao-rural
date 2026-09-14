@@ -29,6 +29,9 @@ export class WebFarmDatabase extends Dexie {
   settings!: Table<LocalRecord>;
   ui_config!: Table<LocalRecord>;
   employees!: Table<LocalRecord>;
+  clients!: Table<LocalRecord>;
+  appointments!: Table<LocalRecord>;
+  fuelings!: Table<LocalRecord>;
   sectors!: Table<LocalRecord>;
   anomalies!: Table<LocalRecord>;
   instructions!: Table<LocalRecord>;
@@ -42,11 +45,12 @@ export class WebFarmDatabase extends Dexie {
   media_blobs!: Table<MediaBlobRecord>;
 
   constructor() {
-    super('FarmDB_Web_v3');
+    super('CampoLegado_TESTE_Supabase_Web_v1');
     (this as any).version(1).stores({
       settings: 'id, synced, updated_at',
       ui_config: 'id, synced, updated_at',
       employees: 'id, synced, updated_at',
+      clients: 'id, synced, updated_at',
       sectors: 'id, synced, updated_at',
       anomalies: 'id, synced, updated_at',
       instructions: 'id, synced, updated_at',
@@ -61,6 +65,15 @@ export class WebFarmDatabase extends Dexie {
     // v2: adiciona farm_monthly_stats que estava ausente no schema original
     (this as any).version(2).stores({
       farm_monthly_stats: 'id, synced, updated_at'
+    });
+    (this as any).version(3).stores({
+      clients: 'id, synced, updated_at'
+    });
+    (this as any).version(4).stores({
+      appointments: 'id, synced, updated_at'
+    });
+    (this as any).version(5).stores({
+      fuelings: 'id, synced, updated_at'
     });
   }
 }

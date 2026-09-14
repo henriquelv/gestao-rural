@@ -3,6 +3,7 @@ import { Filesystem, Directory } from '@capacitor/filesystem';
 import { MediaItem } from '../types';
 import { webDB } from './localdb.web';
 import { supabase } from './supabase';
+import { createId } from '../utils/id';
 
 // ── Cache offline de mídia remota ──
 const CACHE_INDEX_KEY = 'media_offline_cache_v1';
@@ -47,6 +48,8 @@ const OFFLINE_PLACEHOLDER =
       <text x="320" y="360" text-anchor="middle" font-family="Arial, sans-serif" font-size="22" font-weight="700" fill="#6B7280">Midia indisponivel offline</text>
     </svg>`
   );
+
+const createMediaId = (): string => createId('media');
 
 const resolveDataPath = (rawPath: string): { path: string; directory?: Directory } => {
   let p = rawPath || '';
@@ -185,7 +188,7 @@ export const mediaService = {
     }
 
     const inputFile = await this.maybeCompress(file, type);
-    const id = crypto.randomUUID();
+    const id = createMediaId();
     const fileName = `${id}_${inputFile.name}`;
 
     if (this.isNative) {
@@ -224,6 +227,72 @@ export const mediaService = {
       size: inputFile.size,
       pendingUpload: true
     };
+  },
+
+  async saveMediaBlob(blob: Blob, type: MediaItem['type'], name: string): Promise<MediaItem> {
+    if (!(blob instanceof Blob) || blob.size === 0) {
+      throw new Error('A assinatura ficou vazia. Assine novamente.');
+    }
+
+    const id = createMediaId();
+    const mimeType = blob.type || 'image/png';
+    const safeName = name || 'assinatura-cliente.png';
+    const inlineFallback = async (): Promise<MediaItem> => ({
+      id,
+      type,
+      uri: `data:${mimeType};base64,${await this.fileToBase64(blob)}`,
+      mimeType,
+      name: safeName,
+      size: blob.size,
+      pendingUpload: true
+    });
+
+    if (this.isNative) {
+      try {
+        const base64Data = await this.fileToBase64(blob);
+        const saved = await Filesystem.writeFile({
+          path: `media/${id}_assinatura-cliente.png`,
+          data: base64Data,
+          directory: Directory.Data,
+          recursive: true
+        });
+        return {
+          id,
+          type,
+          localPath: saved.uri,
+          mimeType,
+          name: safeName,
+          size: blob.size,
+          pendingUpload: true
+        };
+      } catch (error) {
+        console.warn('Armazenamento nativo da assinatura indisponível; usando cópia incorporada.', error);
+        return inlineFallback();
+      }
+    }
+
+    try {
+      await webDB.open();
+      await webDB.media_blobs.put({
+        id,
+        blob,
+        mimeType,
+        createdAt: new Date().toISOString()
+      });
+
+      return {
+        id,
+        type,
+        localPath: id,
+        mimeType,
+        name: safeName,
+        size: blob.size,
+        pendingUpload: true
+      };
+    } catch (error) {
+      console.warn('IndexedDB indisponível para assinatura; usando cópia incorporada.', error);
+      return inlineFallback();
+    }
   },
 
   getUnavailablePlaceholder(): string {
@@ -457,7 +526,7 @@ export const mediaService = {
       if (!resp.ok) return false;
       const blob = await resp.blob();
 
-      const cacheId = `cache_${item.id || crypto.randomUUID()}`;
+      const cacheId = `cache_${item.id || createMediaId()}`;
 
       if (this.isNative) {
         const base64 = await this.fileToBase64(new File([blob], cacheId));
@@ -526,7 +595,7 @@ export const mediaService = {
     return Object.keys(_getOfflineCacheIndex()).length;
   },
 
-  fileToBase64(file: File): Promise<string> {
+  fileToBase64(file: Blob): Promise<string> {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.readAsDataURL(file);

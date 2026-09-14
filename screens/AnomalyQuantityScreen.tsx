@@ -124,7 +124,7 @@ export const AnomalyQuantityScreen: React.FC = () => {
 
   return (
     <Layout>
-      <Header title="Quantidade de Anomalias" targetRoute="/anomalies" />
+      <Header title="Quantidade de OS" targetRoute="/anomalies" />
       
       <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-gray-50 pb-24">
         {/* FILTROS - COLAPSÁVEL */}
@@ -264,7 +264,7 @@ export const AnomalyQuantityScreen: React.FC = () => {
         {viewMode === 'chart' && (
           <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4">
               <h3 className="font-black text-gray-800 uppercase text-sm mb-4">
-                {selectedSector === 'all' ? `Anomalias por Mês - ${selectedYear}` : `Anomalias - ${selectedSector} - ${selectedYear}`}
+                {selectedSector === 'all' ? `Ordens de Serviço por Mês - ${selectedYear}` : `OS - ${selectedSector} - ${selectedYear}`}
               </h3>
               
               <div className="overflow-x-auto pb-4">
@@ -477,7 +477,7 @@ export const AnomalyQuantityScreen: React.FC = () => {
             <li>• Cada barra/linha representa um mês (1º ao último dia)</li>
             <li>• Clique em um setor abaixo para filtrar o gráfico</li>
             <li>• O total acumulado mostra o somatório de todos os meses</li>
-            <li>• O gráfico atualiza automaticamente quando anomalias são adicionadas</li>
+            <li>• O gráfico atualiza automaticamente quando Ordens de Serviço são adicionadas</li>
             <li>• Use os filtros acima para diferentes visualizações</li>
           </ul>
         </div>

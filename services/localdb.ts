@@ -1,6 +1,5 @@
 import { Capacitor } from '@capacitor/core';
 import { webDB, LocalRecord } from './localdb.web';
-import { nativeDB } from './localdb.native';
 
 type ChangeCallback = (tableName: string) => void;
 const _listeners: Record<string, Set<ChangeCallback>> = {};
@@ -14,15 +13,28 @@ const notifyChange = (tableName: string) => {
 };
 
 const isNative = Capacitor.isNativePlatform();
+type NativeDB = typeof import('./localdb.native')['nativeDB'];
+let nativeDBPromise: Promise<NativeDB> | null = null;
+
+const getNativeDB = async (): Promise<NativeDB> => {
+  if (!isNative) throw new Error('SQLite nativo solicitado fora do aplicativo Android.');
+  if (!nativeDBPromise) {
+    nativeDBPromise = import('./localdb.native').then(async ({ nativeDB }) => {
+      await nativeDB.init();
+      return nativeDB;
+    });
+  }
+  return nativeDBPromise;
+};
 
 if (isNative) {
-  nativeDB.init();
+  void getNativeDB();
 }
 
 export const localdb = {
   async getAll<T>(tableName: string, orderBy?: string): Promise<T[]> {
     if (isNative) {
-      return await nativeDB.getAll(tableName, orderBy);
+      return await (await getNativeDB()).getAll(tableName, orderBy);
     }
 
     // @ts-ignore
@@ -38,7 +50,7 @@ export const localdb = {
 
   async getById<T>(tableName: string, id: string): Promise<T | null> {
     if (isNative) {
-      return await nativeDB.get(tableName, id);
+      return await (await getNativeDB()).get(tableName, id);
     }
     // @ts-ignore
     const record = await webDB[tableName]?.get(id);
@@ -47,7 +59,7 @@ export const localdb = {
 
   async getRawById(tableName: string, id: string): Promise<{ id: string; synced: boolean; data: any } | null> {
     if (isNative) {
-      return await nativeDB.getRawById(tableName, id);
+      return await (await getNativeDB()).getRawById(tableName, id);
     }
     // @ts-ignore
     const record = await webDB[tableName]?.get(id);
@@ -57,7 +69,7 @@ export const localdb = {
 
   async count(tableName: string): Promise<number> {
     if (isNative) {
-      return await nativeDB.count(tableName);
+      return await (await getNativeDB()).count(tableName);
     }
     // @ts-ignore
     return await webDB[tableName].count();
@@ -65,7 +77,7 @@ export const localdb = {
 
   async put(tableName: string, record: LocalRecord): Promise<void> {
     if (isNative) {
-      await nativeDB.put(tableName, record);
+      await (await getNativeDB()).put(tableName, record);
       notifyChange(tableName);
       return;
     }
@@ -76,6 +88,7 @@ export const localdb = {
 
   async bulkPut(tableName: string, records: LocalRecord[]): Promise<void> {
     if (isNative) {
+      const nativeDB = await getNativeDB();
       for (const r of records) await nativeDB.put(tableName, r);
       notifyChange(tableName);
       return;
@@ -87,7 +100,7 @@ export const localdb = {
 
   async delete(tableName: string, id: string): Promise<void> {
     if (isNative) {
-      await nativeDB.delete(tableName, id);
+      await (await getNativeDB()).delete(tableName, id);
       notifyChange(tableName);
       return;
     }
@@ -96,10 +109,23 @@ export const localdb = {
     notifyChange(tableName);
   },
 
+  async clearTable(tableName: string): Promise<void> {
+    if (isNative) {
+      await (await getNativeDB()).clearTable(tableName);
+      notifyChange(tableName);
+      return;
+    }
+    // @ts-ignore
+    const table = webDB[tableName];
+    if (!table) return;
+    await table.clear();
+    notifyChange(tableName);
+  },
+
   // Retorna registros com synced=false — usado para recuperar órfãos ao iniciar
   async getUnsyncedRawRecords(tableName: string): Promise<{ id: string; data: any }[]> {
     if (isNative) {
-      return await nativeDB.getUnsyncedRawRecords(tableName);
+      return await (await getNativeDB()).getUnsyncedRawRecords(tableName);
     }
     // @ts-ignore
     const table = webDB[tableName];
@@ -126,7 +152,7 @@ export const localdb = {
 
   async addToOutbox(item: any): Promise<void> {
     if (isNative) {
-      await nativeDB.addToOutbox(item);
+      await (await getNativeDB()).addToOutbox(item);
       return;
     }
     await webDB.outbox.add(item);
@@ -134,7 +160,7 @@ export const localdb = {
 
   async getPendingOutbox(): Promise<any[]> {
     if (isNative) {
-      return await nativeDB.getPendingOutbox();
+      return await (await getNativeDB()).getPendingOutbox();
     }
     return await webDB.outbox.where('status').equals('pending').sortBy('created_at');
   },
@@ -142,14 +168,14 @@ export const localdb = {
   async getOutboxErrors(limit: number = 50): Promise<any[]> {
     if (isNative) {
       // @ts-ignore
-      return await nativeDB.getOutboxErrors(limit);
+      return await (await getNativeDB()).getOutboxErrors(limit);
     }
     return await webDB.outbox.where('status').equals('error').reverse().limit(limit).toArray();
   },
 
   async deleteOutboxItem(id: number): Promise<void> {
     if (isNative) {
-      await nativeDB.markOutboxDone(id);
+      await (await getNativeDB()).markOutboxDone(id);
       return;
     }
     await webDB.outbox.delete(id);
@@ -157,7 +183,7 @@ export const localdb = {
 
   async markOutboxError(id: number, msg: string): Promise<void> {
     if (isNative) {
-      await nativeDB.markOutboxError(id, msg);
+      await (await getNativeDB()).markOutboxError(id, msg);
       return;
     }
     await webDB.outbox.update(id, { status: 'error', errorMessage: msg });
@@ -166,7 +192,7 @@ export const localdb = {
   async updateOutboxPayload(id: number, payload: any): Promise<void> {
     if (isNative) {
       // @ts-ignore
-      await nativeDB.updateOutboxPayload(id, payload);
+      await (await getNativeDB()).updateOutboxPayload(id, payload);
       return;
     }
     await webDB.outbox.update(id, { payload });
@@ -175,7 +201,7 @@ export const localdb = {
   async retryOutboxItem(id: number): Promise<void> {
     if (isNative) {
       // @ts-ignore
-      await nativeDB.retryOutboxItem(id);
+      await (await getNativeDB()).retryOutboxItem(id);
       return;
     }
     await webDB.outbox.update(id, { status: 'pending', errorMessage: undefined });
@@ -184,17 +210,34 @@ export const localdb = {
   async retryAllOutboxErrors(): Promise<void> {
     if (isNative) {
       // @ts-ignore
-      await nativeDB.retryAllOutboxErrors();
+      await (await getNativeDB()).retryAllOutboxErrors();
       return;
     }
     const errs = await webDB.outbox.where('status').equals('error').toArray();
     await Promise.all(errs.map((e) => webDB.outbox.update(e.id as number, { status: 'pending', errorMessage: undefined })));
   },
 
+  async clearOutbox(): Promise<void> {
+    if (isNative) {
+      await (await getNativeDB()).clearOutbox();
+      return;
+    }
+    await webDB.outbox.clear();
+  },
+
+  async clearOutboxForTables(tableNames: string[]): Promise<void> {
+    if (tableNames.length === 0) return;
+    if (isNative) {
+      await (await getNativeDB()).clearOutboxForTables(tableNames);
+      return;
+    }
+    await webDB.outbox.filter((item) => tableNames.includes(item.tableName)).delete();
+  },
+
   async getOutboxSummary(): Promise<{ total: number; pending: number; errors: number; lastError: any | null }> {
     if (isNative) {
       // @ts-ignore
-      return await nativeDB.getOutboxSummary();
+      return await (await getNativeDB()).getOutboxSummary();
     }
     const [pending, errors, all] = await Promise.all([
       webDB.outbox.where('status').equals('pending').count(),

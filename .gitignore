@@ -38,6 +38,8 @@ android/captures/
 *.bak
 *.tmp
 *.temp
+.tmp-chrome-*
+.tmp-edge-km/
 .DS_Store
 Thumbs.db
 
@@ -51,6 +53,7 @@ Thumbs.db
 .env
 .env.local
 .env.*.local
+*-credentials.txt
 
 # Logs
 logs/
@@ -61,3 +64,6 @@ logs/
 !public/**/*.pdf
 !PDFs/**/*.pdf
 !src/assets/**/*.pdf
+
+.vercel
+.env*

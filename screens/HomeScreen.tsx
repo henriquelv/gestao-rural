@@ -1,137 +1,249 @@
-
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import {
+  AlertCircle,
+  CalendarDays,
+  ClipboardList,
+  ArrowUpRight,
+  Cloud,
+  CloudOff,
+  ChevronRight,
+  Megaphone,
+  RefreshCw,
+  Settings,
+  ShieldCheck,
+  Sprout,
+  Fuel,
+  ChartNoAxesCombined,
+  UserRound
+} from 'lucide-react';
+import { BrandLogo } from '../components/BrandLogo';
 import { Layout } from '../components/Layout';
-import { BigButton } from '../components/BigButton';
+import { APP_BRAND, APP_ENVIRONMENT, VISIBLE_HOME_ROUTES } from '../constants/app';
 import { db } from '../services/db.service';
-import { Cloud, CloudOff, RefreshCw, AlertCircle } from 'lucide-react';
-import { FarmSettings, UIConfig } from '../types';
+import { isSupabaseConfigured } from '../services/supabase';
+import { farmContextService } from '../services/farm-context.service';
+import { permissionsService } from '../services/permissions.service';
+import { authService } from '../services/auth.service';
+import { UIBlock, UIConfig } from '../types';
 
+const HOME_BUTTON_FALLBACK: UIBlock[] = [
+  { id: 'home-anomalies', screen: 'home', type: 'button', label: 'ORDEM DE SERVIÇO (OS)', color: 'green', iconType: 'lucide', iconValue: 'clipboard', route: '/anomalies', order: 1, visible: true },
+  { id: 'home-agenda', screen: 'home', type: 'button', label: 'AGENDA', color: 'green', iconType: 'lucide', iconValue: 'calendar', route: '/agenda', order: 2, visible: true },
+  { id: 'home-fuelings', screen: 'home', type: 'button', label: 'ABASTECIMENTOS', color: 'yellow', iconType: 'lucide', iconValue: 'fuel', route: '/fuelings', order: 3, visible: true },
+  { id: 'home-farm-indicators', screen: 'home', type: 'button', label: 'INDICADORES DA FAZENDA', color: 'green', iconType: 'lucide', iconValue: 'chart', route: '/farm-indicators', order: 4, visible: true },
+  { id: 'home-rural-management', screen: 'home', type: 'button', label: 'GESTÃO CAMPO LEGADO', color: 'green', iconType: 'lucide', iconValue: 'sprout', route: '/rural-management', order: 5, visible: true },
+  { id: 'home-notices', screen: 'home', type: 'button', label: 'COMUNICADOS', color: 'green', iconType: 'lucide', iconValue: 'megaphone', route: '/notices', order: 6, visible: true },
+  { id: 'home-settings', screen: 'home', type: 'button', label: 'CONFIGURAÇÕES', color: 'gray', iconType: 'lucide', iconValue: 'settings', route: '/settings', order: 7, visible: true }
+];
 
-// Logo Vetorial MDA Fidedigna
-// 'sistema' em cinza (topo), 'M' e 'A' em cinza escuro, 'D' em azul ciano.
-const MDA_LOGO_SVG = `data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxNjAgNjAiPgogIDx0ZXh0IHg9IjIiIHk9IjE4IiBmb250LWZhbWlseT0iQXJpYWwsIHNhbnMtc2VyaWYiIGZvbnQtc2l6ZT0iMTQiIGZpbGw9IiM4ODg4ODgiPnNpc3RlbWE8L3RleHQ+CiAgPHRleHQgeD0iMCIgeT0iNTgiIGZvbnQtZmFtaWx5PSJBcmlhbCwgc2Fucy1zZXJpZiIgZm9udC1zaXplPSI0OCIgZm9udC13ZWlnaHQ9IjkwMCIgZmlsbD0iIzMzMzMzMyI+TTwvdGV4dD4KICA8dGV4dCB4PSI0NCIgeT0iNTgiIGZvbnQtZmFtaWx5PSJBcmlhbCwgc2Fucy1zZXJpZiIgZm9udC1zaXplPSI0OCIgZm9udC13ZWlnaHQ9IjkwMCIgZmlsbD0iIzAwOWFkZSI+RDwvdGV4dD4KICA8dGV4dCB4PSI4NCIgeT0iNTgiIGZvbnQtZmFtaWx5PSJBcmlhbCwgc2Fucy1zZXJpZiIgZm9udC1zaXplPSI0OCIgZm9udC13ZWlnaHQ9IjkwMCIgZmlsbD0iIzMzMzMzMyI+QTwvdGV4dD4KPC9zdmc+`;
+const MODULE_DETAILS: Record<string, {
+  description: string;
+  title: string;
+  icon: React.ElementType;
+  cardClass: string;
+  iconClass: string;
+  number: string;
+}> = {
+  '/anomalies': {
+    title: 'Ordem de Serviço (OS)',
+    description: 'Registre visitas, valores, localização e anexos de cada atendimento.',
+    icon: ClipboardList,
+    cardClass: 'bg-[#f1d8c8] text-[#51261c] border-[#d6b6a2]',
+    iconClass: 'bg-[#9f3f2d] text-white',
+    number: '01'
+  },
+  '/notices': {
+    title: 'Comunicados',
+    description: 'Publique orientações e mantenha todos alinhados no dia a dia.',
+    icon: Megaphone,
+    cardClass: 'bg-[#dbe7cf] text-[#173d31] border-[#b9cbaa]',
+    iconClass: 'bg-[#315f45] text-white',
+    number: '06'
+  },
+  '/fuelings': {
+    title: 'Abastecimentos',
+    description: 'Registre combustível, hodômetro, litros e valores, mesmo sem internet.',
+    icon: Fuel,
+    cardClass: 'bg-[#f0dfad] text-[#443713] border-[#d6c079]',
+    iconClass: 'bg-[#8b6500] text-white',
+    number: '03'
+  },
+  '/farm-indicators': {
+    title: 'Indicadores da Fazenda',
+    description: 'Consulte os dados de rebanho, leite, reprodução, saúde e financeiro por fazenda.',
+    icon: ChartNoAxesCombined,
+    cardClass: 'bg-[#dbe7cf] text-[#173d31] border-[#b9cbaa]',
+    iconClass: 'bg-[#315f45] text-white',
+    number: '04'
+  },
+  '/rural-management': {
+    title: 'Gestão Campo Legado',
+    description: 'Compare o conglomerado das fazendas atendidas e acompanhe médias da operação.',
+    icon: Sprout,
+    cardClass: 'bg-[#cfe0c7] text-[#173d31] border-[#a9c09f]',
+    iconClass: 'bg-[#1f5a40] text-white',
+    number: '05'
+  },
+  '/agenda': {
+    title: 'Agenda de visitas',
+    description: 'Organize clientes e responsáveis por manhã e tarde, mesmo sem internet.',
+    icon: CalendarDays,
+    cardClass: 'bg-[#f3e5b9] text-[#49370d] border-[#d9c484]',
+    iconClass: 'bg-[#9a6800] text-white',
+    number: '02'
+  },
+  '/settings': {
+    title: 'Configurações',
+    description: 'Indicadores de OS, filtros, cadastros e controles administrativos.',
+    icon: Settings,
+    cardClass: 'bg-[#e7dfd1] text-[#2f4038] border-[#c8bdab]',
+    iconClass: 'bg-[#624d3f] text-white',
+    number: '07'
+  }
+};
 
 export const HomeScreen: React.FC = () => {
   const navigate = useNavigate();
-  const [settings, setSettings] = useState<FarmSettings | null>(null);
+  const currentContext = farmContextService.getContext();
+  const isAdmin = permissionsService.isAdmin(currentContext);
   const [ui, setUi] = useState<UIConfig | null>(null);
-  const [syncStatus, setSyncStatus] = useState<{ pending: number; errors: number; isRunning: boolean }>({ pending: 0, errors: 0, isRunning: false });
+  const [syncStatus, setSyncStatus] = useState({ pending: 0, errors: 0, isRunning: false });
 
   useEffect(() => {
-    // Carrega dados
-    db.getSettings().then(setSettings);
     db.getUIConfig().then(setUi);
 
+    // Sem backend não há nada para sincronizar. Evita varrer uma fila local antiga.
+    if (!isSupabaseConfigured) return;
+
     const updateStatus = async () => {
-      const s = await db.getSyncStatus();
-      setSyncStatus(prev => ({ ...prev, pending: s.pendingCount, errors: s.errorCount }));
+      const status = await db.getSyncStatus();
+      setSyncStatus((current) => ({
+        ...current,
+        pending: status.pendingCount,
+        errors: status.errorCount
+      }));
     };
 
-    updateStatus();
-    const inv = setInterval(updateStatus, 5000); // Check every 5s
-
-    const onStart = () => setSyncStatus(prev => ({ ...prev, isRunning: true }));
+    void updateStatus();
+    const interval = window.setInterval(updateStatus, 5000);
+    const onStart = () => setSyncStatus((current) => ({ ...current, isRunning: true }));
     const onEnd = () => {
-      setSyncStatus(prev => ({ ...prev, isRunning: false }));
-      updateStatus();
+      setSyncStatus((current) => ({ ...current, isRunning: false }));
+      void updateStatus();
     };
 
     window.addEventListener('app-sync-start', onStart);
     window.addEventListener('app-sync-end', onEnd);
 
     return () => {
-      clearInterval(inv);
+      window.clearInterval(interval);
       window.removeEventListener('app-sync-start', onStart);
       window.removeEventListener('app-sync-end', onEnd);
     };
   }, []);
 
-  if (!ui) return null;
+  const visibleRoutes = VISIBLE_HOME_ROUTES as readonly string[];
+  const configuredHomeButtons = ui?.buttons?.filter((button) => button.screen === 'home') || [];
+  const homeButtons = HOME_BUTTON_FALLBACK
+    .map((fallback) => configuredHomeButtons.find((button) => button.route === fallback.route) || fallback)
+    .filter((button) => button.screen === 'home' && visibleRoutes.includes(button.route) && ((button.route !== '/settings' && button.route !== '/rural-management') || isAdmin))
+    .sort((a, b) => visibleRoutes.indexOf(a.route) - visibleRoutes.indexOf(b.route));
 
-  // Filter and Sort Buttons for Home Screen
-  const homeButtons = ui.buttons
-    .filter(b => b.screen === 'home' && b.visible)
-    .sort((a, b) => a.order - b.order);
+  const syncPresentation = !isSupabaseConfigured
+    ? { icon: CloudOff, label: 'Banco desconectado', className: 'text-amber-100 border-amber-300/30 bg-amber-200/10', spin: false }
+    : syncStatus.isRunning
+      ? { icon: RefreshCw, label: 'Sincronizando', className: 'text-sky-100 border-sky-300/30 bg-sky-200/10', spin: true }
+      : syncStatus.errors > 0
+        ? { icon: AlertCircle, label: `${syncStatus.errors} não enviado${syncStatus.errors > 1 ? 's' : ''}`, className: 'text-amber-100 border-amber-300/30 bg-amber-200/10', spin: false }
+        : syncStatus.pending > 0
+          ? { icon: CloudOff, label: `${syncStatus.pending} pendente${syncStatus.pending > 1 ? 's' : ''}`, className: 'text-amber-100 border-amber-300/30 bg-amber-200/10', spin: false }
+          : { icon: Cloud, label: 'Sincronizado', className: 'text-emerald-100 border-emerald-300/30 bg-emerald-200/10', spin: false };
 
-  const handleNavigate = (route: string) => {
-    if (route.startsWith('/')) {
-      navigate(route);
-    } else {
-      console.warn("Rota inválida:", route);
-    }
-  };
+  const SyncIcon = syncPresentation.icon;
 
   return (
-    <Layout>
-      {/* Background Gradient */}
-      <div className="absolute inset-0 bg-gradient-to-br from-slate-100 to-blue-50 z-0 pointer-events-none" />
+    <Layout className="bg-[#0d2f25]">
+      <div className="pointer-events-none absolute inset-0 bg-[#0d2f25]" />
+      <div className="campo-field-lines pointer-events-none absolute inset-0 opacity-40" />
 
-      {/* Header Area Limpo: Apenas Logo MDA e Logo Fazenda (Opcional) */}
-      <div className="pt-4 px-6 pb-2 flex items-center justify-between z-10 relative">
-        {/* Logo Sistema MDA */}
-        <div className="flex items-center gap-3">
-          <img
-            src={MDA_LOGO_SVG}
-            className="h-10 w-auto object-contain drop-shadow-sm"
-            alt="Sistema MDA"
-          />
+      <header className="relative z-10 flex items-start justify-between px-5 pb-2 pt-5">
+        <div className="rounded-xl bg-[#f7f2e8] px-3 py-1.5 shadow-[0_12px_30px_rgba(0,0,0,0.18)]">
+          <BrandLogo compact />
+        </div>
 
-          {/* Sync Status Badge */}
-          <div
-            onClick={() => syncStatus.errors > 0 && navigate('/settings')}
-            className={`flex items-center gap-1.5 px-2 py-1 rounded-full text-[10px] font-bold border transition-colors ${syncStatus.isRunning ? 'bg-blue-50 text-blue-600 border-blue-200' :
-                syncStatus.errors > 0 ? 'bg-red-50 text-red-600 border-red-200 animate-pulse cursor-pointer' :
-                  syncStatus.pending > 0 ? 'bg-amber-50 text-amber-600 border-amber-200' :
-                    'bg-green-50 text-green-600 border-green-200'
-              }`}
+        <div className={`mt-1 flex items-center gap-1.5 rounded-full border px-2.5 py-1.5 text-[10px] font-bold uppercase tracking-[0.12em] ${syncPresentation.className}`}>
+          <SyncIcon size={12} className={syncPresentation.spin ? 'animate-spin' : ''} />
+          {syncPresentation.label}
+        </div>
+      </header>
+
+      <main className="relative z-10 flex-1 overflow-y-auto px-5 pb-7 pt-5 no-scrollbar">
+        <div className="mb-4 flex items-center justify-between rounded-xl border border-white/10 bg-white/[0.06] px-3 py-2 text-white">
+          <button type="button" onClick={() => navigate('/profile')} className="flex min-w-0 flex-1 items-center gap-2 rounded-lg text-left" aria-label="Abrir suas informações">
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[#b8ca9d]/15 text-[#caddb3]">{isAdmin ? <ShieldCheck size={17} /> : <UserRound size={17} />}</span>
+            <div className="min-w-0 flex-1"><p className="truncate text-xs font-black">{currentContext?.employee_name || 'Perfil local'}</p><p className="text-[9px] font-bold uppercase tracking-[0.12em] text-white/45">Suas informações · {currentContext?.employee_role || (isAdmin ? 'Gestão' : 'Técnico')}</p></div>
+            <ChevronRight size={16} className="shrink-0 text-white/45" />
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              if (!window.confirm('Deseja realmente sair deste perfil e escolher outro usuário?')) return;
+              authService.logout();
+              farmContextService.clearContext();
+              window.location.reload();
+            }}
+            className="shrink-0 rounded-lg border border-white/10 px-2.5 py-2 text-[9px] font-black uppercase tracking-[0.1em] text-white/70"
           >
-            {syncStatus.isRunning ? <RefreshCw size={10} className="animate-spin" /> :
-              syncStatus.errors > 0 ? <AlertCircle size={10} /> :
-                syncStatus.pending > 0 ? <CloudOff size={10} /> :
-                  <Cloud size={10} />}
-
-            {syncStatus.isRunning ? 'SINCRONIZANDO' :
-              syncStatus.errors > 0 ? `${syncStatus.errors} ERROS` :
-                syncStatus.pending > 0 ? `${syncStatus.pending} PENDENTES` :
-                  'SINCRONIZADO'}
-          </div>
+            Trocar perfil
+          </button>
         </div>
+        <section aria-label="Módulos disponíveis" className="space-y-3">
+          {homeButtons.map((button, index) => {
+            const details = MODULE_DETAILS[button.route];
+            if (!details) return null;
+            const Icon = details.icon;
 
-        {/* Logo da Fazenda (Canto Direito - Opcional) */}
-        {settings?.farmLogoUri && (
-          <div className="h-14 w-14 rounded-full border-4 border-white shadow-md overflow-hidden bg-white">
-            <img
-              src={settings.farmLogoUri}
-              className="h-full w-full object-cover"
-              alt="Logo Fazenda"
-              onError={(e) => {
-                (e.currentTarget as HTMLImageElement).style.display = 'none';
-              }}
-            />
-          </div>
-        )}
-      </div>
+            return (
+              <button
+                key={button.id}
+                type="button"
+                onClick={() => navigate(button.route)}
+                className={`campo-module-card campo-reveal group relative w-full overflow-hidden rounded-[22px] border p-5 text-left shadow-[0_16px_40px_rgba(0,0,0,0.16)] transition duration-300 active:scale-[0.985] ${details.cardClass}`}
+                style={{ animationDelay: `${120 + index * 90}ms` }}
+              >
+                <span className="absolute right-4 top-3 font-mono text-[11px] font-bold tracking-[0.18em] opacity-45">
+                  {details.number}
+                </span>
+                <div className="flex items-start gap-4">
+                  <div className={`flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl shadow-sm ${details.iconClass}`}>
+                    <Icon size={27} strokeWidth={2.2} />
+                  </div>
+                  <div className="min-w-0 flex-1 pr-1">
+                    <h2 className="campo-display text-[27px] leading-none tracking-[-0.02em]">
+                      {details.title}
+                    </h2>
+                    <p className="mt-2 text-[13px] font-medium leading-5 opacity-80">
+                      {details.description}
+                    </p>
+                  </div>
+                </div>
+                <div className="mt-5 flex items-center justify-between border-t border-current/15 pt-3 text-[11px] font-black uppercase tracking-[0.18em]">
+                  <span>Abrir módulo</span>
+                  <ArrowUpRight className="transition-transform duration-300 group-hover:-translate-y-0.5 group-hover:translate-x-0.5" size={18} />
+                </div>
+              </button>
+            );
+          })}
+        </section>
 
-      {/* Grid Content */}
-      <div className="flex-1 px-4 py-2 overflow-y-auto no-scrollbar pb-40 z-10">
-
-        {/* Grid de Botões */}
-        <div className="grid grid-cols-2 gap-3 content-start">
-          {homeButtons.map(btn => (
-            <div key={btn.id} className={btn.id === 'h7' || btn.route === '/settings' ? 'col-span-2' : ''}>
-              <BigButton
-                icon={btn.iconValue}
-                iconType={btn.iconType}
-                label={btn.label}
-                color={btn.color}
-                onClick={() => handleNavigate(btn.route)}
-                fullWidth={btn.id === 'h7' || btn.route === '/settings'}
-              />
-            </div>
-          ))}
-        </div>
-      </div>
+        <footer className="mt-7 flex items-center justify-between border-t border-white/10 pt-4 text-[10px] font-bold uppercase tracking-[0.15em] text-white/55">
+          <span>{APP_BRAND.appName}</span>
+          <span className="rounded-full border border-[#b8ca9d]/30 bg-[#b8ca9d]/10 px-2 py-1 text-[#caddb3]">
+            Ambiente {APP_ENVIRONMENT.label}
+          </span>
+        </footer>
+      </main>
     </Layout>
   );
 };

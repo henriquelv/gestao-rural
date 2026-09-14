@@ -14,6 +14,7 @@ import { validateFileSize } from '../../utils/media-compression';
 import { SECTORS_LIST, getSectorColors } from '../../constants/sectors';
 import { mediaService } from '../../services/media.service';
 import { farmContextService } from '../../services/farm-context.service';
+import { createId } from '../../utils/id';
 
 export const AddImprovementScreen: React.FC = () => {
   const navigate = useNavigate();
@@ -84,7 +85,7 @@ export const AddImprovementScreen: React.FC = () => {
   const handleSave = async () => {
     if (!employee || !desc) { notify("Preencha funcionário e descrição.", "error"); return; }
     await db.addImprovement({
-      id: crypto.randomUUID(),
+      id: createId('improvement'),
       createdAt: timestamp,
       employee,
       employee_id: selectedEmployee?.id || farmContextService.getContext()?.employee_id,

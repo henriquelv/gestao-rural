@@ -16,6 +16,7 @@ import { PinRequestModal } from '../../components/PinRequestModal';
 import { authService } from '../../services/auth.service';
 import { mediaService } from '../../services/media.service';
 import { farmContextService } from '../../services/farm-context.service';
+import { createId } from '../../utils/id';
 
 export const AddInstructionScreen: React.FC = () => {
   const navigate = useNavigate();
@@ -95,7 +96,7 @@ export const AddInstructionScreen: React.FC = () => {
 
   const performSave = async () => {
     await db.addInstruction({
-      id: crypto.randomUUID(),
+      id: createId('instruction'),
       createdAt: timestamp,
       title,
       sector: selectedSector || 'Geral',

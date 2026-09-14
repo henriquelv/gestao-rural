@@ -1,14 +1,48 @@
 
-import { Anomaly, Instruction, Notice, Improvement, FarmDoc, DailyMilk, MonthlyStats, Employee, FarmSettings, UIConfig, UIBlock, DailyMetric, Sector } from '../types';
-import { supabase } from './supabase';
+import { Anomaly, Appointment, Fueling, Instruction, Notice, Improvement, FarmDoc, DailyMilk, MonthlyStats, Employee, Client, FarmSettings, UIConfig, UIBlock, DailyMetric, Sector } from '../types';
+import { isSupabaseConfigured, supabase } from './supabase';
 import { notify } from './notification.service';
 import { localdb } from './localdb';
 import { syncService } from './sync.service';
 import { mediaService } from './media.service';
 import { farmContextService } from './farm-context.service';
+import { ADMIN_PROFILE, CLIENTS, LOCAL_LEGACY_CLEANUP_FLAG, LOCAL_PROFILES } from '../constants/work-orders';
 
-const isOnline = () => navigator.onLine;
+const isOnline = () => navigator.onLine && isSupabaseConfigured;
 const nowISO = () => new Date().toISOString();
+const isManagementContext = () => {
+  const context = farmContextService.getContext();
+  const role = (context?.employee_role || '').trim().toLocaleLowerCase('pt-BR');
+  return context?.is_owner === true || role === 'administrador' || (context?.is_admin === true && !role);
+};
+const canReadWorkOrder = (item: Anomaly) => {
+  if (!item || typeof item !== 'object') return false;
+  const context = farmContextService.getContext();
+  if (isManagementContext()) return true;
+  if (!context) return false;
+  const creatorId = String(item.createdByEmployeeId || item.employee_id || '');
+  if (creatorId) return creatorId === String(context.employee_id);
+  const creatorName = item.createdByEmployeeName || item.employee_name || item.responsible || '';
+  return creatorName.trim().toLocaleLowerCase('pt-BR') === context.employee_name.trim().toLocaleLowerCase('pt-BR');
+};
+const canReadAppointment = (item: Appointment) => {
+  if (!item || typeof item !== 'object') return false;
+  const context = farmContextService.getContext();
+  if (isManagementContext()) return true;
+  if (!context) return false;
+  if (String(item.employee_id || '') === String(context.employee_id)) return true;
+  return (item.employee_name || '').trim().toLocaleLowerCase('pt-BR')
+    === context.employee_name.trim().toLocaleLowerCase('pt-BR');
+};
+const canReadFueling = (item: Fueling) => {
+  if (!item || typeof item !== 'object') return false;
+  const context = farmContextService.getContext();
+  if (isManagementContext()) return true;
+  if (!context) return false;
+  if (String(item.employee_id || item.driverId || '') === String(context.employee_id)) return true;
+  return (item.employee_name || item.driverName || '').trim().toLocaleLowerCase('pt-BR')
+    === context.employee_name.trim().toLocaleLowerCase('pt-BR');
+};
 
 const lastRefreshKey = (tableName: string) => `last_refresh_${tableName}`;
 const REFRESH_SCOPE_KEY = 'last_refresh_scope_v2';
@@ -16,7 +50,8 @@ const REFRESH_SCOPE_KEY = 'last_refresh_scope_v2';
 const getRefreshScope = () => {
   const projectUrl = (import.meta.env.VITE_SUPABASE_URL as string | undefined) || '';
   const farmId = farmContextService.getFarmId() || 'no_farm';
-  return `${projectUrl}|${farmId}`;
+  const profileScope = farmContextService.getContext()?.employee_id || 'no_profile';
+  return `${projectUrl}|${farmId}|${profileScope}`;
 };
 
 const resetRefreshMarkersForScopeChange = () => {
@@ -59,11 +94,15 @@ const clearLastRefresh = (tableName: string) => {
 };
 
 const getTimestampFieldForTable = (tableName: string): string | null => {
-  if (tableName === 'anomalies') return 'createdAt';
-  if (tableName === 'instructions') return 'createdAt';
-  if (tableName === 'notices') return 'createdAt';
-  if (tableName === 'improvements') return 'createdAt';
-  if (tableName === 'farm_docs') return 'updatedAt';
+  // O schema TESTE possui updated_at e toda escrita do app o renova. Isso traz
+  // somente alterações recentes sem perder edições feitas após a criação.
+  if (tableName === 'anomalies') return 'updated_at';
+  if (tableName === 'appointments') return 'updated_at';
+  if (tableName === 'fuelings') return 'updated_at';
+  if (tableName === 'instructions') return 'updated_at';
+  if (tableName === 'notices') return 'updated_at';
+  if (tableName === 'improvements') return 'updated_at';
+  if (tableName === 'farm_docs') return 'updated_at';
   // daily_metrics, milk_daily e farm_monthly_stats usam 'date'/'monthKey' como chave
   // de negócio, não como timestamp de modificação. Delta sync por esse campo faz com que
   // edições em datas retroativas nunca cheguem em outros dispositivos. Fazemos fetch
@@ -82,6 +121,9 @@ const farmScopedTables = new Set([
   'settings',
   'sectors',
   'employees',
+  'clients',
+  'appointments',
+  'fuelings',
   'anomalies',
   'instructions',
   'notices',
@@ -96,6 +138,8 @@ const farmScopedTables = new Set([
 // Tabelas de dados operacionais devem filtrar estritamente por farm_id.
 const configOnlyTables = new Set(['ui_config', 'farm_settings', 'settings', 'sectors']);
 const metadataTables = new Set([
+  'appointments',
+  'fuelings',
   'anomalies',
   'instructions',
   'notices',
@@ -105,6 +149,7 @@ const metadataTables = new Set([
   'daily_metrics',
   'farm_monthly_stats'
 ]);
+const deletionAwareTables = new Set(['appointments', 'fuelings', 'anomalies', 'instructions', 'notices', 'improvements', 'farm_docs']);
 const smartReadHydratedKeys = new Set<string>();
 
 const localRecordId = (tableName: string, row: any) => {
@@ -175,14 +220,14 @@ const normalizeRemoteUrls = (tableName: string, row: any) => {
 };
 
 const MOCK_SETTINGS: FarmSettings = {
-  farmName: 'FAZENDA SANTA LUZIA',
-  ownerName: 'Gestão Rural',
-  headerTextColor: '#1f2937',
+  farmName: 'CAMPO LEGADO CONSULTORIA',
+  ownerName: 'Campo Legado Consultoria',
+  headerTextColor: '#143f32',
   farmLogoUri: ''
 };
 
 const DEFAULT_UI_BUTTONS: UIBlock[] = [
-  { id: 'h1', screen: 'home', type: 'button', label: 'ANOMALIAS', color: 'red', iconType: 'lucide', iconValue: 'alert', route: '/anomalies', order: 1, visible: true },
+  { id: 'h1', screen: 'home', type: 'button', label: 'ORDEM DE SERVIÇO (OS)', color: 'green', iconType: 'lucide', iconValue: 'clipboard', route: '/anomalies', order: 1, visible: true },
   { id: 'h2', screen: 'home', type: 'button', label: 'INSTRUÇÕES DE TRABALHO', color: 'purple', iconType: 'lucide', iconValue: 'file', route: '/instructions', order: 2, visible: true },
   { id: 'h3', screen: 'home', type: 'button', label: 'COMUNICADOS', color: 'blue', iconType: 'lucide', iconValue: 'megaphone', route: '/notices', order: 3, visible: true },
   { id: 'h4', screen: 'home', type: 'button', label: 'DADOS FAZENDA', color: 'yellow', iconType: 'lucide', iconValue: 'chart', route: '/data', order: 4, visible: true },
@@ -190,9 +235,9 @@ const DEFAULT_UI_BUTTONS: UIBlock[] = [
   { id: 'h6', screen: 'home', type: 'button', label: 'NORMAS & ORG.', color: 'pink', iconType: 'lucide', iconValue: 'clipboard', route: '/norms', order: 6, visible: true },
   { id: 'h7', screen: 'home', type: 'button', label: 'CONFIGURAÇÕES', color: 'gray', iconType: 'lucide', iconValue: 'settings', route: '/settings', order: 7, visible: true },
 
-  { id: 'a1', screen: 'anomalies_menu', type: 'button', label: 'ADICIONAR ANOMALIA', color: 'green', iconType: 'lucide', iconValue: 'plus', route: '/anomalies/add', order: 1, visible: true },
-  { id: 'a2', screen: 'anomalies_menu', type: 'button', label: 'LISTA DE ANOMALIAS', color: 'blue', iconType: 'lucide', iconValue: 'list', route: '/anomalies/list', order: 2, visible: true },
-  { id: 'a3', screen: 'anomalies_menu', type: 'button', label: 'QUANTIDADE DE ANOMALIAS', color: 'purple', iconType: 'lucide', iconValue: 'bar-chart', route: '/anomalies/quantity', order: 3, visible: true },
+  { id: 'a1', screen: 'anomalies_menu', type: 'button', label: 'NOVA ORDEM DE SERVIÇO', color: 'green', iconType: 'lucide', iconValue: 'plus', route: '/anomalies/add', order: 1, visible: true },
+  { id: 'a2', screen: 'anomalies_menu', type: 'button', label: 'VISITAS E EXPORTAÇÕES', color: 'blue', iconType: 'lucide', iconValue: 'list', route: '/anomalies/list', order: 2, visible: true },
+  { id: 'a3', screen: 'anomalies_menu', type: 'button', label: 'RELATÓRIO DE OS', color: 'purple', iconType: 'lucide', iconValue: 'bar-chart', route: '/anomalies/quantity', order: 3, visible: false },
   { id: 'i1', screen: 'instructions_menu', type: 'button', label: 'ALIMENTAÇÃO', color: 'yellow', iconType: 'lucide', iconValue: 'box', route: '/instructions/Alimentação', order: 1, visible: true },
   { id: 'i2', screen: 'instructions_menu', type: 'button', label: 'MANEJO', color: 'green', iconType: 'lucide', iconValue: 'activity', route: '/instructions/Manejo', order: 2, visible: true },
   { id: 'i3', screen: 'instructions_menu', type: 'button', label: 'CRIAÇÃO', color: 'orange', iconType: 'lucide', iconValue: 'baby', route: '/instructions/Criação', order: 3, visible: true },
@@ -216,49 +261,10 @@ const DEFAULT_UI_BUTTONS: UIBlock[] = [
 ];
 
 const DEFAULT_UI_CONFIG: UIConfig = { buttons: DEFAULT_UI_BUTTONS, customPages: [] };
+let uiConfigMemoryCache: UIConfig | null = null;
 const DEFAULT_SECTORS_LIST = Object.values(Sector);
 
-const DEFAULT_EMPLOYEES_LIST: Employee[] = [
-  { id: '1', name: 'ADILSON', role: 'Colaborador' },
-  { id: '2', name: 'ADOIR', role: 'Colaborador' },
-  { id: '3', name: 'ADRIANA', role: 'Colaborador' },
-  { id: '4', name: 'ALINE', role: 'Colaborador' },
-  { id: '5', name: 'ANTONIO', role: 'Colaborador' },
-  { id: '6', name: 'APARECIDO', role: 'Colaborador' },
-  { id: '7', name: 'ARIADNE', role: 'Colaborador' },
-  { id: '8', name: 'BETO', role: 'Colaborador' },
-  { id: '9', name: 'BIGU', role: 'Colaborador' },
-  { id: '10', name: 'CLAUBER', role: 'Colaborador' },
-  { id: '11', name: 'CLENILDO', role: 'Colaborador' },
-  { id: '12', name: 'EDUARDO', role: 'Colaborador' },
-  { id: '13', name: 'EDUARDO 2', role: 'Colaborador' },
-  { id: '14', name: 'ELIAS', role: 'Colaborador' },
-  { id: '15', name: 'ELIAS S', role: 'Colaborador' },
-  { id: '16', name: 'EVA', role: 'Colaborador' },
-  { id: '17', name: 'GIDELSON', role: 'Colaborador' },
-  { id: '18', name: 'ISABELLI', role: 'Colaborador' },
-  { id: '19', name: 'JANETE', role: 'Colaborador' },
-  { id: '20', name: 'JOÃO', role: 'Colaborador' },
-  { id: '21', name: 'JORGE', role: 'Colaborador' },
-  { id: '22', name: 'JOSI', role: 'Colaborador' },
-  { id: '23', name: 'JUAREZ', role: 'Colaborador' },
-  { id: '24', name: 'LENICE', role: 'Colaborador' },
-  { id: '25', name: 'LUIZ', role: 'Colaborador' },
-  { id: '26', name: 'MARIA', role: 'Colaborador' },
-  { id: '27', name: 'MARIO', role: 'Colaborador' },
-  { id: '28', name: 'RAIMUNDA', role: 'Colaborador' },
-  { id: '29', name: 'ROSE', role: 'Colaborador' },
-  { id: '30', name: 'ROY', role: 'Colaborador' },
-  { id: '31', name: 'SANDRO', role: 'Colaborador' },
-  { id: '32', name: 'SARA', role: 'Colaborador' },
-  { id: '33', name: 'SOLANGE', role: 'Colaborador' },
-  { id: '34', name: 'TAINÁ', role: 'Colaborador' },
-  { id: '35', name: 'THALIA', role: 'Colaborador' },
-  { id: '36', name: 'VANDERLEI', role: 'Colaborador' },
-  { id: '37', name: 'VANDERSON', role: 'Colaborador' },
-  { id: '38', name: 'VANESSA', role: 'Colaborador' },
-  { id: '39', name: 'WALLACE', role: 'Colaborador' }
-];
+const DEFAULT_EMPLOYEES_LIST: Employee[] = LOCAL_PROFILES;
 
 async function refreshFromServer(tableName: string): Promise<boolean> {
   if (!isOnline()) return false;
@@ -268,10 +274,16 @@ async function refreshFromServer(tableName: string): Promise<boolean> {
   const last = getLastRefresh(tableName);
   const tsField = getTimestampFieldForTable(tableName);
   const currentFarmId = farmContextService.getFarmId();
-  const makeBaseQuery = (includeFarmFilter = true) => {
-    let q = supabase.from(tableName).select('*');
+  const makeBaseQuery = (includeFarmFilter = true, columns = '*') => {
+    let q = supabase.from(tableName).select(columns);
     if (includeFarmFilter && currentFarmId && farmScopedTables.has(tableName)) {
-      q = q.eq('farm_id', currentFarmId);
+      q = configOnlyTables.has(tableName)
+        ? q.or(`farm_id.eq.${currentFarmId},farm_id.is.null`)
+        : q.eq('farm_id', currentFarmId);
+    }
+    const context = farmContextService.getContext();
+    if ((tableName === 'anomalies' || tableName === 'appointments' || tableName === 'fuelings') && context && !isManagementContext()) {
+      q = q.eq('employee_id', context.employee_id);
     }
     return q;
   };
@@ -296,17 +308,20 @@ async function refreshFromServer(tableName: string): Promise<boolean> {
   };
 
   let data = await runQuery();
-  // Se falhou (ex: coluna farm_id nao existe no schema legado), tenta sem o filtro
-  if (!data) {
-    try {
-      const { data: allData, error: allErr } = await makeBaseQuery(false);
-      if (!allErr && allData) data = allData;
-    } catch {
-      // ignore
-    }
-  }
 
   if (!data) return false;
+
+  // O delta não informa deleções. Para as tabelas editáveis, baixa apenas os IDs
+  // atuais e usa essa lista pequena para remover registros excluídos em outro aparelho.
+  let authoritativeIdRows: any[] | null = null;
+  if (tsField && deletionAwareTables.has(tableName)) {
+    try {
+      const { data: idRows, error: idError } = await makeBaseQuery(true, 'id');
+      if (!idError && idRows) authoritativeIdRows = idRows;
+    } catch {
+      // Sem uma lista autoritativa, não executa limpeza de deleções nesta rodada.
+    }
+  }
 
   data = data.map((d: any) => normalizeRemoteUrls(tableName, d));
 
@@ -322,7 +337,7 @@ async function refreshFromServer(tableName: string): Promise<boolean> {
   const recordsToPut: typeof records = [];
   let preservedLocalChanges = 0;
   try {
-    const conflictTables = new Set(['daily_metrics', 'milk_daily', 'anomalies']);
+    const conflictTables = new Set(['daily_metrics', 'milk_daily', 'appointments', 'fuelings', 'anomalies']);
     for (const record of records) {
       const raw = await localdb.getRawById(tableName, record.id);
       if (raw && raw.synced === false) {
@@ -344,20 +359,33 @@ async function refreshFromServer(tableName: string): Promise<boolean> {
     await localdb.bulkPut(tableName, recordsToPut);
   }
 
-  // Ghost cleanup: para tabelas de full-fetch (sem tsField), remove localmente registros
-  // já sincronizados que o servidor não retornou — indica deleção remota.
-  // Só roda se o servidor retornou dados (evita wipe por falha silenciosa de query).
+  // Ghost cleanup: remove localmente registros já sincronizados que o servidor
+  // não retornou — indica deleção remota. Em delta-sync usa a lista leve de IDs.
+  // Também roda quando o servidor retorna uma lista vazia com sucesso, permitindo
+  // remover do aparelho o último registro que tenha sido apagado remotamente.
   // Nunca deleta registros synced=false (protege alterações locais pendentes).
   // ATENÇÃO: normaliza IDs removendo prefixo farm_id_ para evitar deleção indevida
   // quando servidor e local usam formatos de ID diferentes (legado vs migrado).
-  if (!tsField && data.length > 0) {
+  if (!tsField || authoritativeIdRows !== null) {
     try {
       const businessKey = (id: string) => {
         const idx = id.indexOf('_');
         return idx > 0 ? id.substring(idx + 1) : id;
       };
-      const serverKeys = new Set(records.map(r => businessKey(r.id)));
-      const allLocal = filterByCurrentFarm(tableName, await localdb.getAll<any>(tableName));
+      const authoritativeRecords = tsField
+        ? (authoritativeIdRows || []).map((row) => ({ id: localRecordId(tableName, row) }))
+        : records;
+      const serverKeys = new Set(authoritativeRecords.map((record) => businessKey(record.id)));
+      const localRowsForFarm = filterByCurrentFarm(tableName, await localdb.getAll<any>(tableName));
+      // A consulta de OS de um técnico só retorna as próprias OS. Limitar a limpeza
+      // ao mesmo escopo evita apagar do cache compartilhado registros de outro perfil.
+      const allLocal = tableName === 'anomalies' && !isManagementContext()
+        ? localRowsForFarm.filter((row) => canReadWorkOrder(row as Anomaly))
+        : tableName === 'appointments' && !isManagementContext()
+          ? localRowsForFarm.filter((row) => canReadAppointment(row as Appointment))
+          : tableName === 'fuelings' && !isManagementContext()
+            ? localRowsForFarm.filter((row) => canReadFueling(row as Fueling))
+            : localRowsForFarm;
       for (const row of allLocal) {
         const localId = localRecordId(tableName, row);
         if (!serverKeys.has(businessKey(localId))) {
@@ -381,7 +409,6 @@ async function refreshFromServer(tableName: string): Promise<boolean> {
         .sort()
         .slice(-1)[0];
       if (maxTs) setLastRefresh(tableName, maxTs);
-      else setLastRefresh(tableName, nowISO());
     } else {
       setLastRefresh(tableName, nowISO());
     }
@@ -397,6 +424,7 @@ async function smartRead<T>(tableName: string, fallbackData: T[], orderByField?:
     const readLocal = async () => filterByCurrentFarm(tableName, await localdb.getAll<T>(tableName, orderByField));
     let localData = await readLocal();
     const hydrationKey = `${getRefreshScope()}|${tableName}`;
+    let serverSyncAttempted = false;
 
     // Na primeira leitura online por tabela nesta sessão, sincroniza com o servidor.
     // Se há dados locais: retorna imediatamente e atualiza em background (stale-while-revalidate).
@@ -407,6 +435,7 @@ async function smartRead<T>(tableName: string, fallbackData: T[], orderByField?:
       && !smartReadHydratedKeys.has(hydrationKey);
 
     if (needsServerSync) {
+      serverSyncAttempted = true;
       smartReadHydratedKeys.add(hydrationKey); // marca antes do async para evitar dupla chamada
       clearLastRefresh(tableName);
       if (localData.length === 0) {
@@ -421,17 +450,18 @@ async function smartRead<T>(tableName: string, fallbackData: T[], orderByField?:
     }
 
     if (localData.length === 0) {
-      if (isOnline()) {
+      if (isOnline() && !serverSyncAttempted) {
         let q = supabase.from(tableName).select('*');
         if (currentFarmId && farmScopedTables.has(tableName)) {
-          q = q.eq('farm_id', currentFarmId);
+          q = configOnlyTables.has(tableName)
+            ? q.or(`farm_id.eq.${currentFarmId},farm_id.is.null`)
+            : q.eq('farm_id', currentFarmId);
+        }
+        const context = farmContextService.getContext();
+        if ((tableName === 'anomalies' || tableName === 'appointments' || tableName === 'fuelings') && context && !isManagementContext()) {
+          q = q.eq('employee_id', context.employee_id);
         }
         let { data, error } = await q;
-        // Fallback: se coluna farm_id nao existe no schema, tenta sem filtro
-        if ((error || !data || data.length === 0) && currentFarmId && farmScopedTables.has(tableName)) {
-          const fb = await supabase.from(tableName).select('*');
-          if (!fb.error && fb.data) { data = fb.data; error = null; }
-        }
         if (!error && data && data.length > 0) {
           const records = data.map((d: any) => ({
             id: localRecordId(tableName, d),
@@ -440,21 +470,14 @@ async function smartRead<T>(tableName: string, fallbackData: T[], orderByField?:
             synced: true
           }));
           await localdb.bulkPut(tableName, records);
-        } else if (fallbackData.length > 0) {
-          const seeds = (fallbackData as any[]).map((d: any) => ({
-            id: localRecordId(tableName, d),
-            data: d,
-            updated_at: nowISO(),
-            synced: true
-          }));
-          await localdb.bulkPut(tableName, seeds);
         }
-      } else if (fallbackData.length > 0) {
+      }
+      if (localData.length === 0 && fallbackData.length > 0) {
         const seeds = (fallbackData as any[]).map((d: any) => ({
           id: localRecordId(tableName, d),
           data: d,
           updated_at: nowISO(),
-          synced: false
+          synced: isOnline()
         }));
         await localdb.bulkPut(tableName, seeds);
       }
@@ -488,7 +511,8 @@ async function smartWrite(
                 ? String(data.employee_id)
                 : (currentContext?.employee_id ? String(currentContext.employee_id) : undefined),
               employee_name: data.employee_name || currentContext?.employee_name || undefined,
-              device_id: data.device_id || currentContext?.device_id || undefined
+              device_id: data.device_id || currentContext?.device_id || undefined,
+              updated_at: nowISO()
             }
           : {})
       };
@@ -499,14 +523,16 @@ async function smartWrite(
     throw new Error(`Operação ${op} sem id em ${tableName}`);
   }
 
-  const record = { id, data: op === 'delete' ? null : scopedData, updated_at: nowISO(), synced: false, mediaTotalBytes: 0 };
+  const record = { id, data: op === 'delete' ? null : scopedData, updated_at: nowISO(), synced: !isSupabaseConfigured, mediaTotalBytes: 0 };
 
   if (op === 'delete') await localdb.delete(tableName, id);
   else await localdb.put(tableName, record);
 
-  await localdb.addToOutbox({ tableName, op, payload: scopedData, created_at: nowISO(), status: 'pending' });
+  if (isSupabaseConfigured) {
+    await localdb.addToOutbox({ tableName, op, payload: scopedData, created_at: nowISO(), status: 'pending' });
+  }
 
-  notify(isOnline() ? 'Salvando...' : 'Salvo offline.', 'info');
+  notify(isSupabaseConfigured ? (isOnline() ? 'Salvando…' : 'Salvo offline.') : 'Salvo neste aparelho.', 'info');
 
   if (isOnline()) {
     syncService.syncAll();
@@ -549,7 +575,7 @@ async function migrateRaspagemToConforto() {
 // Ocorre quando o app trava entre a escrita local e a escrita no outbox.
 // Os registros ficam visíveis localmente mas nunca sobem pro servidor.
 async function recoverOrphanedRecords(): Promise<void> {
-  const tables = ['anomalies', 'instructions', 'notices', 'improvements', 'farm_docs',
+  const tables = ['appointments', 'fuelings', 'anomalies', 'instructions', 'notices', 'improvements', 'farm_docs',
     'daily_metrics', 'milk_daily'];
   try {
     const pending = await localdb.getPendingOutbox();
@@ -761,17 +787,76 @@ export const db = {
   recoverOrphanedRecords,
   preCacheAllMedia,
 
+  purgeLegacyLocalData: async () => {
+    const CLEANUP_FLAG = LOCAL_LEGACY_CLEANUP_FLAG;
+    try {
+      if (localStorage.getItem(CLEANUP_FLAG)) return;
+
+      const anomalies = await localdb.getAll<Anomaly>('anomalies');
+      const currentWorkOrders = anomalies.filter((item) => item.recordType === 'service_order');
+      const legacyAnomalies = anomalies.filter((item) => item.recordType !== 'service_order');
+
+      for (const item of legacyAnomalies) {
+        for (const media of item.media || []) await mediaService.deleteMedia(media);
+      }
+
+      const mediaTables = ['instructions', 'notices', 'improvements', 'farm_docs'] as const;
+      for (const tableName of mediaTables) {
+        const records = await localdb.getAll<any>(tableName);
+        for (const record of records) {
+          const mediaItems = tableName === 'farm_docs'
+            ? (record.media ? [record.media] : [])
+            : (Array.isArray(record.media) ? record.media : []);
+          for (const media of mediaItems) await mediaService.deleteMedia(media);
+        }
+      }
+
+      const operationalTables = [
+        'anomalies',
+        'instructions',
+        'notices',
+        'improvements',
+        'farm_docs',
+        'daily_metrics',
+        'milk_daily',
+        'farm_monthly_stats',
+        'employees'
+      ];
+      for (const tableName of operationalTables) await localdb.clearTable(tableName);
+
+      const now = nowISO();
+      for (const item of currentWorkOrders) {
+        await localdb.put('anomalies', {
+          id: item.id,
+          data: item,
+          updated_at: now,
+          synced: true
+        });
+      }
+
+      // A fila antiga pertencia ao app anterior. Mantê-la poderia enviar dados
+      // legados caso outro banco fosse conectado no futuro.
+      await localdb.clearOutbox();
+      localStorage.setItem(CLEANUP_FLAG, 'true');
+      console.info(`[Campo Legado] Limpeza local concluída: ${legacyAnomalies.length} anomalia(s) legada(s) removida(s).`);
+    } catch (error) {
+      console.error('[Campo Legado] Não foi possível concluir a limpeza local:', error);
+    }
+  },
+
   getSyncStatus: async () => {
     try {
-      const [pending, errors] = await Promise.all([
-        localdb.getPendingOutbox(),
+      const [summary, errors] = await Promise.all([
+        localdb.getOutboxSummary(),
         localdb.getOutboxErrors(25)
       ]);
 
       return {
-        pendingCount: pending.length,
-        errorCount: errors.length,
-        pending,
+        pendingCount: summary.pending,
+        errorCount: summary.errors,
+        // A interface usa apenas a contagem de pendentes. Não desserializamos
+        // toda a fila (que pode conter imagens/vídeos em payloads antigos).
+        pending: [],
         errors
       };
     } catch (e) {
@@ -801,8 +886,8 @@ export const db = {
     try {
       if (!isOnline()) return;
       const tables = [
-        'ui_config', 'sectors', 'employees',
-        'anomalies', 'instructions', 'notices', 'improvements', 'farm_docs',
+        'ui_config', 'sectors', 'employees', 'clients',
+        'appointments', 'fuelings', 'anomalies', 'instructions', 'notices', 'improvements', 'farm_docs',
         'milk_daily', 'daily_metrics', 'farm_monthly_stats'
       ];
       const scope = getRefreshScope();
@@ -835,8 +920,8 @@ export const db = {
     try {
       if (!isOnline()) return;
       const tables = [
-        'ui_config', 'sectors', 'employees',
-        'anomalies', 'instructions', 'notices', 'improvements', 'farm_docs',
+        'ui_config', 'sectors', 'employees', 'clients',
+        'appointments', 'fuelings', 'anomalies', 'instructions', 'notices', 'improvements', 'farm_docs',
         'milk_daily', 'daily_metrics', 'farm_monthly_stats'
       ];
       tables.forEach(clearLastRefresh);
@@ -895,6 +980,8 @@ export const db = {
   },
 
   getUIConfig: async (): Promise<UIConfig> => {
+    if (uiConfigMemoryCache) return uiConfigMemoryCache;
+
     const res = await smartRead<UIConfig>('ui_config', [DEFAULT_UI_CONFIG], '');
     const current = res[0] || DEFAULT_UI_CONFIG;
 
@@ -907,13 +994,16 @@ export const db = {
         ...current,
         buttons: [...current.buttons, ...missingButtons]
       };
+      uiConfigMemoryCache = merged;
       await db.saveUIConfig(merged);
       return merged;
     }
 
+    uiConfigMemoryCache = current;
     return current;
   },
   saveUIConfig: async (c: UIConfig) => {
+    uiConfigMemoryCache = c;
     const farmId = farmContextService.getFarmId();
     return smartWrite('ui_config', { id: '1', ...c }, 'upsert', 'id', farmId ? `${farmId}_1` : '1');
   },
@@ -947,12 +1037,85 @@ export const db = {
     }
   },
 
-  getEmployees: async () => smartRead<Employee>('employees', DEFAULT_EMPLOYEES_LIST, ''),
+  getEmployees: async () => {
+    if (isSupabaseConfigured) return smartRead<Employee>('employees', DEFAULT_EMPLOYEES_LIST, '');
+    let localEmployees = await localdb.getAll<Employee>('employees');
+    if (localEmployees.length === 0) {
+      const now = nowISO();
+      await localdb.bulkPut('employees', LOCAL_PROFILES.map((employee) => ({
+        id: employee.id,
+        data: { ...employee },
+        updated_at: now,
+        synced: true
+      })));
+      localEmployees = LOCAL_PROFILES.map((employee) => ({ ...employee }));
+    } else if (!localEmployees.some((employee) => employee.is_admin)) {
+      const admin = { ...ADMIN_PROFILE };
+      await localdb.put('employees', { id: admin.id, data: admin, updated_at: nowISO(), synced: true });
+      localEmployees = [admin, ...localEmployees];
+    }
+    return localEmployees;
+  },
   addEmployee: async (e: Employee) => smartWrite('employees', e, 'upsert'),
   updateEmployee: async (e: Employee) => smartWrite('employees', e, 'update'),
   removeEmployee: async (id: string) => smartWrite('employees', id, 'delete'),
 
-  getAnomalies: async () => smartRead<Anomaly>('anomalies', [], 'createdAt'),
+  getClients: async (): Promise<Client[]> => {
+    const fallback: Client[] = CLIENTS.map((name) => ({ id: name, name, status: 'active' }));
+    const clients = await smartRead<Client>('clients', fallback, '');
+    return clients
+      .filter((client) => typeof client?.name === 'string' && client.name.trim() && (!client.status || client.status === 'active'))
+      .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
+  },
+  addClient: async (client: Client) => smartWrite('clients', client, 'upsert'),
+  updateClient: async (client: Client) => smartWrite('clients', { ...client, updated_at: nowISO() }, 'update'),
+  deactivateClient: async (client: Client) => smartWrite('clients', { ...client, status: 'inactive', updated_at: nowISO() }, 'update'),
+
+  getAppointments: async (): Promise<Appointment[]> => (
+    await smartRead<Appointment>('appointments', [], 'date')
+  ).filter(canReadAppointment),
+  getAppointmentById: async (id: string): Promise<Appointment | null> => {
+    const item = await localdb.getById<Appointment>('appointments', id);
+    return item && canReadAppointment(item) ? item : null;
+  },
+  addAppointment: async (appointment: Appointment) => {
+    if (!canReadAppointment(appointment)) throw new Error('Sem permissão para criar este agendamento.');
+    return smartWrite('appointments', appointment, 'upsert');
+  },
+  updateAppointment: async (appointment: Appointment) => {
+    const existing = await localdb.getById<Appointment>('appointments', appointment.id);
+    if ((existing && !canReadAppointment(existing)) || !canReadAppointment(appointment)) {
+      throw new Error('Sem permissão para editar este agendamento.');
+    }
+    return smartWrite('appointments', appointment, 'update');
+  },
+  deleteAppointment: async (id: string) => {
+    const existing = await localdb.getById<Appointment>('appointments', id);
+    if (!existing || !canReadAppointment(existing)) throw new Error('Sem permissão para excluir este agendamento.');
+    return smartWrite('appointments', id, 'delete');
+  },
+
+  getFuelings: async (): Promise<Fueling[]> => (
+    await smartRead<Fueling>('fuelings', [], 'date')
+  ).filter(canReadFueling),
+  addFueling: async (fueling: Fueling) => {
+    if (!canReadFueling(fueling)) throw new Error('Sem permissão para criar este abastecimento.');
+    return smartWrite('fuelings', fueling, 'upsert');
+  },
+  updateFueling: async (fueling: Fueling) => {
+    const existing = await localdb.getById<Fueling>('fuelings', fueling.id);
+    if ((existing && !canReadFueling(existing)) || !canReadFueling(fueling)) throw new Error('Sem permissão para editar este abastecimento.');
+    return smartWrite('fuelings', fueling, 'update');
+  },
+  deleteFueling: async (id: string) => {
+    const existing = await localdb.getById<Fueling>('fuelings', id);
+    if (!existing || !canReadFueling(existing)) throw new Error('Sem permissão para excluir este abastecimento.');
+    return smartWrite('fuelings', id, 'delete');
+  },
+
+  getAnomalies: async () => (await smartRead<Anomaly>('anomalies', [], 'createdAt'))
+    .filter((item): item is Anomaly => Boolean(item && typeof item === 'object'))
+    .filter(canReadWorkOrder),
   addAnomaly: async (a: Anomaly) => smartWrite('anomalies', a, 'upsert'),
   updateAnomaly: async (a: Anomaly) => smartWrite('anomalies', a, 'update'),
   deleteAnomaly: async (id: string) => {
@@ -964,7 +1127,10 @@ export const db = {
     }
     return smartWrite('anomalies', id, 'delete');
   },
-  getAnomalyById: async (id: string) => await localdb.getById<Anomaly>('anomalies', id),
+  getAnomalyById: async (id: string) => {
+    const item = await localdb.getById<Anomaly>('anomalies', id);
+    return item && canReadWorkOrder(item) ? item : null;
+  },
 
   getInstructions: async () => smartRead<Instruction>('instructions', [], 'createdAt'),
   addInstruction: async (i: Instruction) => smartWrite('instructions', i, 'upsert'),

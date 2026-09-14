@@ -1,408 +1,208 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import {
+  CalendarDays,
+  ChevronRight,
+  FileText,
+  Image as ImageIcon,
+  Megaphone,
+  Paperclip,
+  Plus,
+  RotateCcw,
+  Search,
+  SlidersHorizontal,
+  UserRound,
+  Video,
+  X
+} from 'lucide-react';
 import { Layout } from '../../components/Layout';
 import { Header } from '../../components/Header';
-import { Notice, MediaItem } from '../../types';
+import { Notice } from '../../types';
 import { db } from '../../services/db.service';
 import { localdb } from '../../services/localdb';
-import { mediaService } from '../../services/media.service';
-import { downloadService } from '../../services/download.service';
-import { supabase } from '../../services/supabase';
-import { notify } from '../../services/notification.service';
-import { getSectorColors } from '../../constants/sectors';
-import { useImageZoom } from '../../utils/useImageZoom';
-import { PinRequestModal } from '../../components/PinRequestModal';
-import { EmptyState, FilterOption, FilterSheet, FilterToolbar } from '../../components/UiPrimitives';
-import { SECTORS_LIST } from '../../constants/sectors';
-import { Trash2, User, Image as ImageIcon, Video, FileText, Presentation, Download, X, Calendar, LayoutGrid, Paperclip, Search } from 'lucide-react';
+import { cleanNoticeContent, noticeAuthor, noticePreview } from '../../utils/notices';
+
+type PeriodFilter = 'all' | 'today' | '7days' | 'month';
+type AttachmentFilter = 'all' | 'with' | 'without';
+
+const isSameLocalDay = (date: Date, reference: Date) => date.toLocaleDateString('pt-BR') === reference.toLocaleDateString('pt-BR');
+
+const dateLabel = (iso: string) => {
+  const date = new Date(iso);
+  if (isSameLocalDay(date, new Date())) return `Hoje, ${date.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`;
+  return date.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: 'numeric' }).replace('.', '');
+};
+
+const mediaSymbol = (notice: Notice) => {
+  if (notice.media?.some((item) => item.type === 'photo')) return <ImageIcon size={18} />;
+  if (notice.media?.some((item) => item.type === 'video')) return <Video size={18} />;
+  return <FileText size={18} />;
+};
 
 export const ListNoticesScreen: React.FC = () => {
   const navigate = useNavigate();
   const [notices, setNotices] = useState<Notice[]>([]);
+  const [search, setSearch] = useState('');
   const [showFilters, setShowFilters] = useState(false);
-  const [viewingMedia, setViewingMedia] = useState<MediaItem | null>(null);
-  const [viewingUrl, setViewingUrl] = useState<string>('');
-  const [viewingZoom, setViewingZoom] = useState(1);
-  const [filterPeriod, setFilterPeriod] = useState<'all' | 'today' | '7days' | 'month'>('all');
-  const [filterSectors, setFilterSectors] = useState<string[]>([]);
-  const [filterResponsible, setFilterResponsible] = useState('');
-  const [filterMedia, setFilterMedia] = useState<'all' | 'with' | 'without'>('all');
-  const [searchTerm, setSearchTerm] = useState('');
-  const [showPinModal, setShowPinModal] = useState(false);
-  const [pendingAction, setPendingAction] = useState<(() => Promise<void> | void) | null>(null);
-
-  // Gestos de zoom
-  const viewingZoomGestures = useImageZoom((newZoom) => setViewingZoom(newZoom));
-
-  const load = async () => {
-    const data = await db.getNotices();
-    setNotices(data);
-  };
-
-  const [photoUrls, setPhotoUrls] = useState<Record<string, string>>({});
-
-  const loadPhotos = async (data: Notice[]) => {
-    const urls: Record<string, string> = {};
-    for (const n of data) {
-      const photo = n.media?.find(m => m.type === 'photo');
-      if (photo) {
-        const url = await mediaService.loadMediaUrl(photo);
-        if (url) urls[n.id] = url;
-      }
-    }
-    setPhotoUrls(urls);
-  };
-
-  const parseSectorFromContent = (content: string) => {
-    const raw = (content || '').toString();
-    const m = raw.match(/^\[Setor:\s*(.+?)\]\s*/i);
-    if (!m) return { sector: '', content: raw };
-    return { sector: (m[1] || '').trim(), content: raw.replace(m[0], '') };
-  };
+  const [periodFilter, setPeriodFilter] = useState<PeriodFilter>('all');
+  const [responsibleFilter, setResponsibleFilter] = useState('all');
+  const [attachmentFilter, setAttachmentFilter] = useState<AttachmentFilter>('all');
 
   useEffect(() => {
-    const init = async () => {
-      await load();
+    let active = true;
+    const load = async () => {
+      const records = await db.getNotices();
+      if (active) setNotices(records);
     };
-    init();
-    const onOnline = () => load();
-    window.addEventListener('online', onOnline);
-    const unsub = localdb.subscribe('notices', () => load());
-    return () => { window.removeEventListener('online', onOnline); unsub && unsub(); };
+    void load();
+    const unsubscribe = localdb.subscribe('notices', () => { void load(); });
+    return () => { active = false; unsubscribe?.(); };
   }, []);
 
-  useEffect(() => {
-    if (notices.length > 0) loadPhotos(notices);
-  }, [notices]);
-
-  const localDay = (iso: string) => {
-    try {
-      return new Date(iso).toLocaleDateString('pt-BR');
-    } catch {
-      return '';
-    }
-  };
-
-  const toggleSectorFilter = (sector: string) => {
-    setFilterSectors(prev => prev.includes(sector) ? prev.filter(item => item !== sector) : [...prev, sector]);
-  };
+  const authors = useMemo(() => Array.from(new Set(notices.map((notice) => noticeAuthor(notice.employee_name, notice.responsible))))
+    .sort((a, b) => a.localeCompare(b, 'pt-BR')), [notices]);
 
   const filteredNotices = useMemo(() => {
-    let res = [...notices];
-    if (filterPeriod === 'today') {
-      const today = new Date().toLocaleDateString('pt-BR');
-      res = res.filter(n => localDay(n.createdAt) === today);
-    } else if (filterPeriod === '7days') {
-      const cutoff = new Date();
-      cutoff.setDate(cutoff.getDate() - 7);
-      res = res.filter(n => new Date(n.createdAt) >= cutoff);
-    } else if (filterPeriod === 'month') {
-      const month = new Date().toISOString().slice(0, 7);
-      res = res.filter(n => n.createdAt.startsWith(month));
-    }
-    if (filterSectors.length > 0) {
-      res = res.filter(n => filterSectors.includes(parseSectorFromContent(n.content).sector));
-    }
-    if (filterResponsible) {
-      res = res.filter(n => (n.employee_name || n.responsible || '').toLowerCase() === filterResponsible.toLowerCase());
-    }
-    if (filterMedia === 'with') res = res.filter(n => (n.media || []).length > 0);
-    if (filterMedia === 'without') res = res.filter(n => !n.media || n.media.length === 0);
-    if (searchTerm.trim()) {
-      const term = searchTerm.trim().toLowerCase();
-      res = res.filter(n => {
-        const parsed = parseSectorFromContent(n.content);
-        return parsed.content.toLowerCase().includes(term)
-          || parsed.sector.toLowerCase().includes(term)
-          || (n.responsible || '').toLowerCase().includes(term)
-          || (n.employee_name || '').toLowerCase().includes(term);
-      });
-    }
-    res.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-    return res;
-  }, [notices, filterPeriod, filterSectors, filterResponsible, filterMedia, searchTerm]);
+    const normalizedSearch = search.trim().toLocaleLowerCase('pt-BR');
+    const now = new Date();
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+    const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
 
-  const responsibleOptions = useMemo(() => {
-    const names = notices.map(n => n.employee_name || n.responsible).filter(Boolean);
-    return Array.from(new Set(names)).sort((a, b) => a.localeCompare(b));
-  }, [notices]);
+    return [...notices]
+      .filter((notice) => {
+        const createdAt = new Date(notice.createdAt);
+        const author = noticeAuthor(notice.employee_name, notice.responsible);
+        if (periodFilter === 'today' && !isSameLocalDay(createdAt, now)) return false;
+        if (periodFilter === '7days' && createdAt < sevenDaysAgo) return false;
+        if (periodFilter === 'month' && notice.createdAt.slice(0, 7) !== currentMonth) return false;
+        if (responsibleFilter !== 'all' && author !== responsibleFilter) return false;
+        if (attachmentFilter === 'with' && !notice.media?.length) return false;
+        if (attachmentFilter === 'without' && Boolean(notice.media?.length)) return false;
+        if (normalizedSearch && !`${cleanNoticeContent(notice.content)} ${author}`.toLocaleLowerCase('pt-BR').includes(normalizedSearch)) return false;
+        return true;
+      })
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }, [attachmentFilter, notices, periodFilter, responsibleFilter, search]);
 
-  const activeFiltersCount = filterSectors.length
-    + (filterPeriod !== 'all' ? 1 : 0)
-    + (filterResponsible ? 1 : 0)
-    + (filterMedia !== 'all' ? 1 : 0)
-    + (searchTerm.trim() ? 1 : 0);
-
+  const activeFilters = Number(periodFilter !== 'all') + Number(responsibleFilter !== 'all') + Number(attachmentFilter !== 'all');
   const clearFilters = () => {
-    setFilterPeriod('all');
-    setFilterSectors([]);
-    setFilterResponsible('');
-    setFilterMedia('all');
-    setSearchTerm('');
-  };
-
-  const getIcon = (type: string) => {
-    switch (type) {
-      case 'pdf': return <FileText size={16} className="text-red-500" />;
-      case 'doc': return <FileText size={16} className="text-blue-600" />;
-      case 'ppt': return <Presentation size={16} className="text-orange-500" />;
-      case 'video': return <Video size={16} className="text-purple-500" />;
-      case 'photo': return <ImageIcon size={16} className="text-blue-400" />;
-      default: return <FileText size={16} className="text-gray-500" />;
-    }
-  };
-
-  const openMedia = async (m: MediaItem) => {
-    setViewingMedia(m);
-    const url = await mediaService.loadMediaUrl(m);
-    setViewingUrl(url || m.remoteUrl || m.uri || '');
-  };
-
-  const handleDelete = async (notice: Notice) => {
-    const action = async () => {
-      try {
-        await db.deleteNotice(notice.id);
-        notify('Comunicado excluído!', 'success');
-        load();
-      } catch (e) {
-        notify('Erro ao excluir comunicado.', 'error');
-      }
-    };
-
-    setPendingAction(() => action);
-    setShowPinModal(true);
-  };
-
-  const handleDownload = async (media: MediaItem, url: string) => {
-    try {
-      if (!media) return;
-
-      const isRemoteHttpUrl = (u: string) => {
-        if (!u) return false;
-        return /^https?:\/\//i.test(u) && !/localhost/i.test(u) && !/127\.0\.0\.1/i.test(u) && !/capacitor/i.test(u);
-      };
-
-      // Resolver URL remota do documento
-      let remoteUrl = media.remoteUrl || '';
-      if (!remoteUrl && media.remotePath) {
-        const { data } = supabase.storage.from('media').getPublicUrl(media.remotePath);
-        remoteUrl = data?.publicUrl || '';
-      }
-
-      if (!remoteUrl && isRemoteHttpUrl(media.uri || '')) {
-        remoteUrl = media.uri || '';
-      }
-
-      if (isRemoteHttpUrl(remoteUrl)) {
-        console.log('Download usando URL remota:', remoteUrl);
-        await downloadService.downloadFile(remoteUrl, media.name || 'documento', media.mimeType || '', media.localPath);
-        return;
-      }
-
-      const localUrl = url || viewingUrl || media.uri || '';
-      if (localUrl) {
-        await downloadService.downloadFile(localUrl, media.name || 'documento', media.mimeType || '', media.localPath);
-        return;
-      }
-
-      notify('Arquivo local não disponível.', 'error');
-    } catch (e) {
-      console.error('Erro no handleDownload:', e);
-    }
+    setPeriodFilter('all');
+    setResponsibleFilter('all');
+    setAttachmentFilter('all');
   };
 
   return (
-    <Layout>
-      <Header title="Comunicados" targetRoute="/notices" />
+    <Layout className="bg-[#f4f0e7]">
+      <Header title="Mural de comunicados" targetRoute="/notices" />
 
-      <FilterToolbar
-        activeCount={activeFiltersCount}
-        onOpen={() => setShowFilters(true)}
-        resultCount={filteredNotices.length}
-        totalCount={notices.length}
-      />
-
-      <div className="flex-1 bg-gray-100 p-4 overflow-y-auto">
-        <div className="space-y-3">
-          {filteredNotices.map(n => {
-            const parsed = parseSectorFromContent(n.content);
-            const sector = parsed.sector;
-            const content = parsed.content;
-            const photo = n.media?.find(m => m.type === 'photo');
-            const hasVideo = n.media?.some(m => m.type === 'video');
-            const hasDocs = n.media?.some(m => ['pdf', 'doc', 'ppt'].includes(m.type));
-            const author = n.employee_name || n.responsible;
-            
-            return (
-              <div
-                key={n.id}
-                onClick={() => navigate(`/notices/detail/${n.id}`)}
-                className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden mb-4 cursor-pointer hover:shadow-md active:opacity-90 transition-all"
-              >
-                <div className="p-4">
-                  <div className="flex items-start gap-4">
-                    <div className="w-14 h-14 rounded-xl flex items-center justify-center shrink-0 border border-gray-100" style={{ backgroundColor: getSectorColors(sector).bg, color: getSectorColors(sector).fg }}>
-                      {photo ? <ImageIcon size={24} /> : hasVideo ? <Video size={24} /> : <FileText size={24} />}
-                    </div>
-                    
-                    <div className="flex-1 min-w-0">
-                      <div className="flex justify-between items-start mb-1">
-                        <h3 className="font-black text-gray-800 text-base leading-tight truncate">
-                          {sector || 'Comunicado'}
-                        </h3>
-                        <button onClick={(e) => { e.stopPropagation(); handleDelete(n); }} className="p-1 -mr-1 -mt-1 text-gray-300 hover:text-red-500 active:text-red-600 transition-colors">
-                          <Trash2 size={18} />
-                        </button>
-                      </div>
-                      <p className="text-gray-600 text-sm mb-2 line-clamp-2">
-                        {content}
-                      </p>
-                      <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500">
-                        <span className="inline-flex items-center gap-1"><Calendar size={13} />{new Date(n.createdAt).toLocaleDateString('pt-BR')}</span>
-                        <span className="inline-flex items-center gap-1 min-w-0"><User size={13} /><span className="truncate max-w-[120px]">{author}</span></span>
-                        {(photo || hasVideo || hasDocs) && (
-                          <span className="inline-flex items-center gap-1 text-blue-600 font-bold">
-                            <Paperclip size={13} />{n.media.length}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            );
-          })}
-          {filteredNotices.length === 0 && (
-            <EmptyState title="Nenhum comunicado encontrado" description="Ajuste os filtros ou registre um novo comunicado." />
-          )}
-        </div>
-      </div>
-
-      {showFilters && (
-        <FilterSheet title="Filtrar comunicados" onClose={() => setShowFilters(false)} onClear={clearFilters}>
-          <div>
-            <label className="block text-sm font-black text-gray-500 mb-2 uppercase flex items-center"><Search size={16} className="mr-1" /> Busca</label>
+      <section className="border-b border-[#d8d0c2] bg-white px-4 py-3">
+        <div className="flex gap-2">
+          <div className="relative min-w-0 flex-1">
+            <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[#6c7a72]" size={18} />
             <input
-              value={searchTerm}
-              onChange={e => setSearchTerm(e.target.value)}
-              className="w-full p-3 border-2 border-gray-200 rounded-lg outline-none focus:border-blue-500 font-bold text-gray-700"
-              placeholder="Texto, setor ou funcionário"
+              type="search"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Buscar mensagem ou autor"
+              className="h-12 w-full rounded-xl border-2 border-[#d8d0c2] bg-[#faf8f3] pl-10 pr-3 text-sm font-semibold text-[#173f32] outline-none placeholder:text-[#929994] focus:border-[#3f7457] focus-visible:ring-2 focus-visible:ring-[#3f7457]/20"
             />
           </div>
-          <div>
-            <label className="block text-sm font-black text-gray-500 mb-2 uppercase flex items-center"><Calendar size={16} className="mr-1" /> Período</label>
-            <div className="grid grid-cols-2 gap-2">
-              <FilterOption active={filterPeriod === 'today'} onClick={() => setFilterPeriod('today')}>Hoje</FilterOption>
-              <FilterOption active={filterPeriod === '7days'} onClick={() => setFilterPeriod('7days')}>7 Dias</FilterOption>
-              <FilterOption active={filterPeriod === 'month'} onClick={() => setFilterPeriod('month')}>Este Mês</FilterOption>
-              <FilterOption active={filterPeriod === 'all'} onClick={() => setFilterPeriod('all')}>Todos</FilterOption>
-            </div>
-          </div>
-          <div>
-            <label className="block text-sm font-black text-gray-500 mb-2 uppercase flex items-center"><User size={16} className="mr-1" /> Funcionário</label>
-            <select
-              className="w-full p-3 border-2 border-gray-200 rounded-lg bg-white font-bold text-gray-700 outline-none focus:border-blue-500"
-              value={filterResponsible}
-              onChange={(e) => setFilterResponsible(e.target.value)}
-            >
-              <option value="">Todos</option>
-              {responsibleOptions.map(name => <option key={name} value={name}>{name}</option>)}
-            </select>
-          </div>
-          <div>
-            <label className="block text-sm font-black text-gray-500 mb-2 uppercase flex items-center"><LayoutGrid size={16} className="mr-1" /> Setores</label>
-            <div className="grid grid-cols-2 gap-2">
-              {SECTORS_LIST.map(s => (
-                <FilterOption
-                  key={s}
-                  active={filterSectors.includes(s)}
-                  onClick={() => toggleSectorFilter(s)}
-                  style={{ backgroundColor: getSectorColors(s).bg, color: getSectorColors(s).fg, borderColor: getSectorColors(s).border }}
-                >
-                  {s}
-                </FilterOption>
-              ))}
-            </div>
-          </div>
-          <div>
-            <label className="block text-sm font-black text-gray-500 mb-2 uppercase flex items-center"><Paperclip size={16} className="mr-1" /> Anexos</label>
-            <div className="grid grid-cols-3 gap-2">
-              <FilterOption active={filterMedia === 'all'} onClick={() => setFilterMedia('all')}>Todos</FilterOption>
-              <FilterOption active={filterMedia === 'with'} onClick={() => setFilterMedia('with')}>Com</FilterOption>
-              <FilterOption active={filterMedia === 'without'} onClick={() => setFilterMedia('without')}>Sem</FilterOption>
-            </div>
-          </div>
-        </FilterSheet>
-      )}
-
-      {viewingMedia && (
-        <div className="fixed inset-0 z-[100] bg-black/90 flex flex-col animate-in fade-in duration-200">
-          <div className="h-16 bg-black flex items-center justify-between px-4 shrink-0">
-            <span className="text-white font-bold truncate pr-4 text-sm">{viewingMedia.name || viewingMedia.type}</span>
-            <div className="flex items-center gap-2">
-              <button onClick={() => { setViewingMedia(null); setViewingUrl(''); }} className="bg-white/20 p-2 rounded-full text-white hover:bg-white/30"><X size={20} /></button>
-            </div>
-          </div>
-          <div className="flex-1 flex items-center justify-center p-2 relative bg-gray-900 overflow-auto">
-            {viewingMedia.type === 'photo' ? (
-              <img
-                src={viewingUrl || viewingMedia.remoteUrl || viewingMedia.uri}
-                className="object-contain"
-                style={viewingZoomGestures.imageStyle}
-                onTouchStart={viewingZoomGestures.handleTouchStart}
-                onTouchMove={viewingZoomGestures.handleTouchMove}
-                onTouchEnd={viewingZoomGestures.handleTouchEnd}
-                onError={(e) => {
-                  const next = viewingMedia.remoteUrl || viewingMedia.uri || '';
-                  if (next && (e.currentTarget as HTMLImageElement).src !== next) {
-                    (e.currentTarget as HTMLImageElement).src = next;
-                  }
-                }}
-              />
-            ) : viewingMedia.type === 'video' ? (
-              <video
-                src={viewingUrl || viewingMedia.remoteUrl || viewingMedia.uri}
-                controls
-                autoPlay
-                playsInline
-                className="max-w-full max-h-full"
-                onError={(e) => {
-                  const next = viewingMedia.remoteUrl || viewingMedia.uri || '';
-                  const el = e.currentTarget as HTMLVideoElement;
-                  if (next && el.src !== next) {
-                    el.src = next;
-                    void el.play().catch(() => { });
-                  }
-                }}
-              />
-            ) : (
-              <div className="bg-white p-6 rounded-xl text-center">
-                <FileText size={48} className="text-gray-300 mx-auto mb-4" />
-                <h3 className="font-bold text-gray-800 mb-2">Baixar Arquivo</h3>
-                <p className="text-sm text-gray-500 mb-4 uppercase">{viewingMedia.type}</p>
-                <button onClick={() => handleDownload(viewingMedia, viewingUrl)} className="bg-blue-600 text-white px-6 py-3 rounded-lg font-bold flex items-center gap-2 hover:bg-blue-700 active:bg-blue-800"><Download size={20} /> BAIXAR</button>
-              </div>
-            )}
-          </div>
+          <button type="button" onClick={() => setShowFilters(true)} className={`relative flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border-2 ${activeFilters ? 'border-[#173f32] bg-[#173f32] text-white' : 'border-[#d8d0c2] bg-white text-[#476356]'}`} aria-label="Abrir filtros">
+            <SlidersHorizontal size={20} />
+            {activeFilters > 0 && <span className="absolute -right-1.5 -top-1.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-[#b84b36] px-1 text-[10px] font-black text-white">{activeFilters}</span>}
+          </button>
+          <button type="button" onClick={() => navigate('/notices/add', { state: { fixedTimestamp: new Date().toISOString() } })} className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-[#3f7457] text-white shadow-sm" aria-label="Novo comunicado"><Plus size={22} /></button>
         </div>
-      )}
 
-      {showPinModal && (
-        <PinRequestModal
-          title="Excluir Comunicado?"
-          description="Tem certeza que deseja excluir este comunicado? Ele não poderá ser recuperado. Digite o PIN."
-          onSuccess={() => {
-            setShowPinModal(false);
-            if (pendingAction) {
-              void pendingAction();
-              setPendingAction(null);
-            }
-          }}
-          onClose={() => {
-            setShowPinModal(false);
-            setPendingAction(null);
-          }}
-        />
+        <div className="mt-3 flex items-center justify-between text-[11px] font-bold text-[#718078]">
+          <span>{filteredNotices.length} de {notices.length} comunicado{notices.length === 1 ? '' : 's'}</span>
+          {activeFilters > 0 && <button type="button" onClick={clearFilters} className="font-black uppercase tracking-[0.08em] text-[#3f7457]">Limpar filtros</button>}
+        </div>
+      </section>
+
+      <main className="flex-1 overflow-y-auto px-4 pb-9 pt-4">
+        {filteredNotices.length === 0 ? (
+          <section className="rounded-[24px] border-2 border-dashed border-[#cfc7ba] bg-white px-6 py-12 text-center">
+            <span className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-[#edf2e8] text-[#3f7457]"><Megaphone size={27} /></span>
+            <h2 className="campo-display mt-4 text-2xl text-[#173f32]">Nenhum comunicado</h2>
+            <p className="mt-2 text-sm font-semibold leading-5 text-[#718078]">Ajuste sua busca ou publique uma nova mensagem para a equipe.</p>
+          </section>
+        ) : (
+          <div className="space-y-3">
+            {filteredNotices.map((notice, index) => {
+              const author = noticeAuthor(notice.employee_name, notice.responsible);
+              return (
+                <button
+                  key={notice.id}
+                  type="button"
+                  onClick={() => navigate(`/notices/detail/${notice.id}`)}
+                  className="campo-reveal w-full overflow-hidden rounded-[22px] border border-[#d8d0c2] bg-white text-left shadow-[0_8px_20px_rgba(47,64,55,0.08)] transition active:scale-[0.99]"
+                  style={{ animationDelay: `${Math.min(index, 6) * 55}ms` }}
+                >
+                  <div className="flex items-center justify-between gap-3 border-b border-[#ebe5da] bg-[#faf8f3] px-4 py-2.5">
+                    <span className="flex items-center gap-1.5 text-[11px] font-black uppercase tracking-[0.05em] text-[#557065]"><CalendarDays size={14} /> {dateLabel(notice.createdAt)}</span>
+                    {notice.media?.length > 0 && <span className="flex items-center gap-1 rounded-full bg-[#e5ecdf] px-2 py-1 text-[10px] font-black text-[#315f45]"><Paperclip size={12} /> {notice.media.length}</span>}
+                  </div>
+                  <div className="flex items-center gap-3 p-4">
+                    <span className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl ${notice.media?.length ? 'bg-[#edf3f7] text-[#31596f]' : 'bg-[#edf2e8] text-[#3f7457]'}`}>
+                      {notice.media?.length ? mediaSymbol(notice) : <Megaphone size={21} />}
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-sm font-bold leading-5 text-[#294238]">{noticePreview(notice.content, 150) || 'Comunicado sem texto'}</span>
+                      <span className="mt-2 flex min-w-0 items-center gap-1.5 text-[11px] font-semibold text-[#718078]"><UserRound size={13} className="shrink-0" /><span className="truncate">{author}</span></span>
+                    </span>
+                    <ChevronRight size={20} className="shrink-0 text-[#8b958f]" />
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </main>
+
+      {showFilters && (
+        <div className="fixed inset-0 z-[80] flex items-end justify-center bg-[#10231d]/65 sm:items-center sm:p-4" onMouseDown={(event) => { if (event.target === event.currentTarget) setShowFilters(false); }}>
+          <section className="w-full max-w-md rounded-t-[28px] bg-[#f8f4eb] p-5 shadow-2xl sm:rounded-[28px]" role="dialog" aria-modal="true" aria-label="Filtros de comunicados">
+            <div className="flex items-center justify-between">
+              <div><p className="text-[10px] font-black uppercase tracking-[0.17em] text-[#718078]">Refinar mural</p><h2 className="campo-display mt-1 text-2xl text-[#173f32]">Filtros</h2></div>
+              <button type="button" onClick={() => setShowFilters(false)} className="flex h-10 w-10 items-center justify-center rounded-full border border-[#d8d0c2] bg-white text-[#173f32]" aria-label="Fechar filtros"><X size={20} /></button>
+            </div>
+
+            <div className="mt-5 space-y-4">
+              <div>
+                <span className="mb-1.5 block text-[10px] font-black uppercase tracking-[0.1em] text-[#64736b]">Período</span>
+                <div className="grid grid-cols-2 gap-2">
+                  {([['all', 'Todos'], ['today', 'Hoje'], ['7days', 'Últimos 7 dias'], ['month', 'Este mês']] as const).map(([value, label]) => (
+                    <button key={value} type="button" onClick={() => setPeriodFilter(value)} className={`rounded-xl border-2 px-2 py-3 text-xs font-black uppercase ${periodFilter === value ? 'border-[#173f32] bg-[#173f32] text-white' : 'border-[#d8d0c2] bg-white text-[#52655b]'}`}>{label}</button>
+                  ))}
+                </div>
+              </div>
+
+              <label className="block">
+                <span className="mb-1.5 block text-[10px] font-black uppercase tracking-[0.1em] text-[#64736b]">Responsável</span>
+                <select value={responsibleFilter} onChange={(event) => setResponsibleFilter(event.target.value)} className="w-full rounded-xl border-2 border-[#d8d0c2] bg-white px-3 py-3 font-bold text-[#173f32] outline-none focus:border-[#3f7457]">
+                  <option value="all">Todos os responsáveis</option>
+                  {authors.map((author) => <option key={author} value={author}>{author}</option>)}
+                </select>
+              </label>
+
+              <div>
+                <span className="mb-1.5 block text-[10px] font-black uppercase tracking-[0.1em] text-[#64736b]">Anexos</span>
+                <div className="grid grid-cols-3 gap-2">
+                  {([['all', 'Todos'], ['with', 'Com anexo'], ['without', 'Sem anexo']] as const).map(([value, label]) => (
+                    <button key={value} type="button" onClick={() => setAttachmentFilter(value)} className={`rounded-xl border-2 px-2 py-3 text-[10px] font-black uppercase ${attachmentFilter === value ? 'border-[#173f32] bg-[#173f32] text-white' : 'border-[#d8d0c2] bg-white text-[#52655b]'}`}>{label}</button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-6 grid grid-cols-[auto_1fr] gap-2">
+              <button type="button" onClick={clearFilters} className="flex items-center justify-center gap-2 rounded-xl border-2 border-[#d8d0c2] bg-white px-4 py-3 text-xs font-black uppercase text-[#52655b]"><RotateCcw size={16} /> Limpar</button>
+              <button type="button" onClick={() => setShowFilters(false)} className="rounded-xl bg-[#173f32] px-4 py-3 text-xs font-black uppercase tracking-[0.08em] text-white">Ver {filteredNotices.length}</button>
+            </div>
+          </section>
+        </div>
       )}
     </Layout>
   );

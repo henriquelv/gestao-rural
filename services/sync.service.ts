@@ -27,6 +27,21 @@ const isMissingConflictConstraint = (error: any): boolean => {
   return error?.code === '42P10' || msg.includes('no unique or exclusion constraint');
 };
 
+const isConnectivityError = (error: any): boolean => {
+  const message = [error?.name, error?.message, error?.details, error?.hint]
+    .filter(Boolean)
+    .join(' ')
+    .toLocaleLowerCase('pt-BR');
+  return error instanceof TypeError
+    || message.includes('failed to fetch')
+    || message.includes('networkerror')
+    || message.includes('network error')
+    || message.includes('load failed')
+    || message.includes('connection')
+    || message.includes('err_internet_disconnected')
+    || message.includes('aborterror');
+};
+
 const upsertWithConflictFallback = async (
   table: any,
   payload: any,
@@ -108,8 +123,8 @@ export const syncService = {
 
   repairPayloadContext(payload: any, tableName: string): any {
     if (!payload || typeof payload !== 'object') return payload;
-    const farmScoped = ['anomalies', 'instructions', 'notices', 'improvements', 'farm_docs', 'milk_daily', 'daily_metrics', 'farm_monthly_stats', 'sectors', 'settings', 'farm_settings'];
-    const metadataTables = ['anomalies', 'instructions', 'notices', 'improvements', 'farm_docs', 'milk_daily', 'daily_metrics', 'farm_monthly_stats'];
+    const farmScoped = ['appointments', 'fuelings', 'anomalies', 'instructions', 'notices', 'improvements', 'farm_docs', 'milk_daily', 'daily_metrics', 'farm_monthly_stats', 'sectors', 'settings', 'farm_settings'];
+    const metadataTables = ['appointments', 'fuelings', 'anomalies', 'instructions', 'notices', 'improvements', 'farm_docs', 'milk_daily', 'daily_metrics', 'farm_monthly_stats'];
     if (!farmScoped.includes(tableName)) return payload;
 
     const ctx = farmContextService.getContext();
@@ -184,6 +199,10 @@ export const syncService = {
         code: error?.code,
         details: error?.details
       });
+      if (isConnectivityError(error)) {
+        this.log('Sync adiado: servidor indisponivel; dados permanecem na fila local');
+        return { ok: false, count: 0 };
+      }
       notify('Nao foi possivel validar o acesso para sincronizar.', 'error');
       return { ok: false, count: 0 };
     }
@@ -209,6 +228,7 @@ export const syncService = {
     this._isSyncing = true;
     let successCount = 0;
     let failCount = 0;
+    let connectionInterrupted = false;
 
     try {
       for (const item of pendingItems) {
@@ -256,6 +276,14 @@ export const syncService = {
             details: error?.details,
             hint: error?.hint
           });
+          if (isConnectivityError(error)) {
+            connectionInterrupted = true;
+            this.log('Sync adiado: conexao interrompida; item mantido como pendente', {
+              id: item.id,
+              tableName: item.tableName
+            });
+            break;
+          }
           failCount++;
           if (item.id) {
             await localdb.markOutboxError(item.id, error.message || 'Erro desconhecido');
@@ -268,14 +296,16 @@ export const syncService = {
 
     if (successCount > 0) notify(`${successCount} itens sincronizados.`, 'success');
     if (failCount > 0) notify(`${failCount} falharam na sincronização.`, 'error');
-    this.log('Sync finalizado', { successCount, failCount });
-    try {
-      localStorage.setItem('last_sync_at', new Date().toISOString());
-    } catch {
-      // ignore
+    this.log('Sync finalizado', { successCount, failCount, connectionInterrupted });
+    if (!connectionInterrupted) {
+      try {
+        localStorage.setItem('last_sync_at', new Date().toISOString());
+      } catch {
+        // ignore
+      }
     }
 
-    return { ok: failCount === 0, count: successCount };
+    return { ok: failCount === 0 && !connectionInterrupted, count: successCount };
   },
 
   async forceReprocessOutbox(): Promise<void> {
@@ -330,6 +360,7 @@ export const syncService = {
 
           updatedMedia.push({
             ...m,
+            uri: m.uri?.startsWith('data:') ? undefined : m.uri,
             remotePath: path,
             remoteUrl: publicUrlData.publicUrl,
             pendingUpload: false
@@ -433,6 +464,8 @@ export const syncService = {
           const deleteFarmId = farmContextService.getFarmId();
           const farmScopedDeleteTables = [
             'employees',
+            'appointments',
+            'fuelings',
             'anomalies',
             'instructions',
             'notices',
@@ -516,7 +549,7 @@ export const syncService = {
   async validateAndRepairData(): Promise<{ isHealthy: boolean; message: string }> {
     try {
       // Verifica se há dados corrompidos no banco local
-      const tables = ['anomalies', 'improvements', 'notices', 'instructions', 'farmDocs'];
+      const tables = ['appointments', 'fuelings', 'anomalies', 'improvements', 'notices', 'instructions', 'farmDocs'];
       let hasIssues = false;
 
       for (const table of tables) {

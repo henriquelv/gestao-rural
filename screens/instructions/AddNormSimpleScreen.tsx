@@ -14,6 +14,7 @@ import { PinRequestModal } from '../../components/PinRequestModal';
 import { authService } from '../../services/auth.service';
 import { mediaService } from '../../services/media.service';
 import { farmContextService } from '../../services/farm-context.service';
+import { createId } from '../../utils/id';
 
 export const AddNormSimpleScreen: React.FC = () => {
   const navigate = useNavigate();
@@ -86,7 +87,7 @@ export const AddNormSimpleScreen: React.FC = () => {
       setIsSaving(true);
       try {
         const newDoc: FarmDoc = {
-            id: crypto.randomUUID(),
+            id: createId('norm'),
             title: title,
             sector: categoryId || 'Geral', // Usamos o ID da categoria como "Setor" para filtrar depois
             responsible,

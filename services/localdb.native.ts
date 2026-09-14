@@ -1,7 +1,7 @@
 import { CapacitorSQLite, SQLiteConnection, SQLiteDBConnection } from '@capacitor-community/sqlite';
 import { Capacitor } from '@capacitor/core';
 
-const DB_NAME = 'FarmDB_Native_v1';
+const DB_NAME = 'CampoLegado_TESTE_Supabase_Native_v1';
 
 class NativeFarmDatabase {
   private sqlite: SQLiteConnection;
@@ -102,6 +102,11 @@ class NativeFarmDatabase {
     await this.db?.run(`DELETE FROM kv_store WHERE table_name = ? AND id = ?`, [tableName, id]);
   }
 
+  async clearTable(tableName: string) {
+    if (!this.db) await this.init();
+    await this.db?.run(`DELETE FROM kv_store WHERE table_name = ?`, [tableName]);
+  }
+
   async addToOutbox(item: any) {
     if (!this.db) await this.init();
     await this.db?.run(`INSERT INTO outbox (table_name, op, payload, created_at, status) VALUES (?, ?, ?, ?, ?)`, [
@@ -165,6 +170,18 @@ class NativeFarmDatabase {
   async retryAllOutboxErrors() {
     if (!this.db) await this.init();
     await this.db?.run(`UPDATE outbox SET status = 'pending', error_message = NULL WHERE status = 'error'`);
+  }
+
+  async clearOutbox() {
+    if (!this.db) await this.init();
+    await this.db?.run(`DELETE FROM outbox`);
+  }
+
+  async clearOutboxForTables(tableNames: string[]) {
+    if (!this.db) await this.init();
+    if (tableNames.length === 0) return;
+    const placeholders = tableNames.map(() => '?').join(', ');
+    await this.db?.run(`DELETE FROM outbox WHERE table_name IN (${placeholders})`, tableNames);
   }
 
   async getRawById(tableName: string, id: string): Promise<{ id: string; synced: boolean; data: any } | null> {

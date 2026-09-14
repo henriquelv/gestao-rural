@@ -1,20 +1,52 @@
 import { AppActivationContext, Employee, Farm, License } from '../types';
-import { supabase } from './supabase';
+import { isSupabaseConfigured, supabase } from './supabase';
 import { farmContextService } from './farm-context.service';
 import { licenseService } from './license.service';
 import { deviceService } from './device.service';
+import { APP_ENVIRONMENT } from '../constants/app';
+import { ADMIN_PROFILE, LOCAL_LEGACY_CLEANUP_FLAG, LOCAL_PROFILES } from '../constants/work-orders';
+import { localdb } from './localdb';
+
+const LOCAL_TEST_FARM_ID = 'campo-legado-local-teste';
 
 export const activationService = {
   async validateActivationCode(
     code: string
   ): Promise<{ farm: Farm | null; employees: Employee[]; isOwner: boolean }> {
     const normalized = code.trim().toUpperCase();
-    if (!normalized) throw new Error('Informe o codigo da fazenda.');
+    if (!normalized) throw new Error('Informe o código da fazenda.');
 
     // Verificar código dono ANTES de ir ao Supabase
     const ownerCode = ((import.meta.env.VITE_OWNER_CODE as string) || '').trim().toUpperCase();
     if (ownerCode && normalized === ownerCode) {
       return { farm: null, employees: [], isOwner: true };
+    }
+
+    if (!isSupabaseConfigured) {
+      if (normalized !== APP_ENVIRONMENT.activationCode) {
+        throw new Error('Código da fazenda inválido. Use TESTE neste ambiente local.');
+      }
+
+      const localFarm: Farm = {
+        id: LOCAL_TEST_FARM_ID,
+        name: 'Campo Legado Consultoria',
+        status: 'active',
+        activation_code: APP_ENVIRONMENT.activationCode,
+        max_devices: 1,
+        grace_period_days: 365
+      };
+      const storedEmployees = localStorage.getItem(LOCAL_LEGACY_CLEANUP_FLAG)
+        ? await localdb.getAll<Employee>('employees')
+        : [];
+      const profiles = storedEmployees.length > 0
+        ? (storedEmployees.some((employee) => employee.is_admin) ? storedEmployees : [ADMIN_PROFILE, ...storedEmployees])
+        : LOCAL_PROFILES;
+      const localEmployees = profiles.map((employee) => ({
+        ...employee,
+        farm_id: LOCAL_TEST_FARM_ID
+      })).sort((a, b) => Number(Boolean(b.is_admin)) - Number(Boolean(a.is_admin)) || a.name.localeCompare(b.name, 'pt-BR'));
+
+      return { farm: localFarm, employees: localEmployees, isOwner: false };
     }
 
     const { data: farm, error } = await supabase
@@ -24,7 +56,7 @@ export const activationService = {
       .maybeSingle();
 
     if (error) throw error;
-    if (!farm) throw new Error('Codigo da fazenda invalido.');
+    if (!farm) throw new Error('Código da fazenda inválido.');
 
     const { data: licenses, error: licenseError } = await supabase
       .from('licenses')
@@ -49,6 +81,26 @@ export const activationService = {
   },
 
   async activate(farm: Farm, employee: Employee) {
+    if (!isSupabaseConfigured && farm.id === LOCAL_TEST_FARM_ID) {
+      const ctx: AppActivationContext = {
+        farm_id: farm.id,
+        farm_name: farm.name,
+        employee_id: String(employee.id),
+        employee_name: employee.name,
+        device_id: farmContextService.getDeviceId(),
+        last_license_check_at: new Date().toISOString(),
+        license_status: 'active',
+        device_status: 'active',
+        grace_period_days: farm.grace_period_days || 365,
+        is_owner: false,
+        is_admin: employee.is_admin === true,
+        admin_pin: employee.access_pin || employee.admin_pin || undefined,
+        employee_role: employee.role || 'Técnico'
+      };
+      farmContextService.saveContext(ctx);
+      return ctx;
+    }
+
     const device = await deviceService.ensureDevice(farm, employee);
     const ctx: AppActivationContext = {
       farm_id: farm.id,
@@ -61,7 +113,9 @@ export const activationService = {
       device_status: device.status,
       grace_period_days: farm.grace_period_days || 7,
       is_owner: false,
-      admin_pin: employee.admin_pin || undefined,
+      is_admin: employee.is_admin === true,
+      admin_pin: employee.access_pin || employee.admin_pin || undefined,
+      employee_role: employee.role || 'Técnico',
     };
     farmContextService.saveContext(ctx);
     return ctx;
@@ -76,6 +130,8 @@ export const activationService = {
       employee_name: 'Dono',
       device_id: deviceId,
       is_owner: true,
+      is_admin: true,
+      employee_role: 'Administrador',
       last_license_check_at: new Date().toISOString(),
       license_status: 'active',
       device_status: 'active',
@@ -88,6 +144,9 @@ export const activationService = {
     const ctx = farmContextService.getContext();
     if (!ctx) return { ok: false, message: 'Aplicativo nao ativado.' };
     if (ctx.is_owner) return { ok: true };
+    if (!isSupabaseConfigured && ctx.farm_id === LOCAL_TEST_FARM_ID) {
+      return { ok: true, offline: true };
+    }
 
     if (!navigator.onLine) {
       const ok = licenseService.isWithinOfflineGrace(ctx.last_license_check_at, ctx.grace_period_days || 7);
@@ -146,7 +205,9 @@ export const activationService = {
       farm_name: (farm as Farm).name,
       employee_id: String((employee as Employee).id || ctx.employee_id),
       employee_name: (employee as Employee).name || ctx.employee_name,
-      admin_pin: (employee as Employee).admin_pin || ctx.admin_pin,
+      admin_pin: (employee as Employee).access_pin || (employee as Employee).admin_pin || ctx.admin_pin,
+      is_admin: (employee as Employee).is_admin === true,
+      employee_role: (employee as Employee).role || ctx.employee_role || 'Técnico',
       last_license_check_at: new Date().toISOString(),
       license_status: license.status,
       device_status: device?.status || 'active',

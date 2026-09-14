@@ -2,7 +2,7 @@ import { CapacitorConfig } from '@capacitor/cli';
 
 const config: CapacitorConfig = {
   appId: 'com.gestaorural.app',
-  appName: 'Gestão Rural',
+  appName: 'Gestão Rural Campo Legado',
   webDir: 'dist',
   bundledWebRuntime: false,
   server: {

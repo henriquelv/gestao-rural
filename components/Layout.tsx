@@ -61,7 +61,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, className = '' }) => {
       >
         {/* Banner offline - sempre visível quando sem conexão */}
         {!isOnline && (
-          <div className="bg-red-600 px-4 py-2 flex items-center justify-center gap-2 text-white text-sm font-bold">
+          <div className="flex items-center justify-center gap-2 bg-[#8b3e2f] px-4 py-2 text-xs font-black uppercase tracking-wide text-white">
             <WifiOff size={16} />
             <span>SEM CONEXÃO — dados salvos localmente</span>
           </div>
@@ -69,12 +69,12 @@ export const Layout: React.FC<LayoutProps> = ({ children, className = '' }) => {
 
         {/* Status de Sincronização */}
         {isOnline && (isSyncing || lastSync) && (
-          <div className="bg-blue-50 border-b border-blue-200 px-4 py-2 flex items-center justify-between text-sm">
+          <div className="flex items-center justify-between border-b border-[#dce5d8] bg-[#edf2e8] px-4 py-2 text-xs">
             <div className="flex items-center gap-2">
-              {isSyncing && <Loader size={14} className="animate-spin text-blue-600" />}
-              <span className="text-blue-700 font-semibold">
+              {isSyncing && <Loader size={14} className="animate-spin text-[#47745e]" />}
+              <span className="font-bold text-[#47745e]">
                 {isSyncing
-                  ? syncProgress ? `Sincronizando: ${syncProgress}` : 'Sincronizando...'
+                  ? syncProgress ? `Sincronizando: ${syncProgress}` : 'Sincronizando…'
                   : `Última sincronização: ${lastSync}`}
               </span>
             </div>

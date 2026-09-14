@@ -11,6 +11,7 @@ import { FarmDoc, MediaItem } from '../types';
 import { notify } from '../services/notification.service';
 import { mediaService } from '../services/media.service';
 import { farmContextService } from '../services/farm-context.service';
+import { createId } from '../utils/id';
 
 export const FarmNormsScreen: React.FC = () => {
   const navigate = useNavigate();
@@ -80,7 +81,7 @@ export const FarmNormsScreen: React.FC = () => {
       setIsSaving(true);
       try {
         const newDoc: FarmDoc = {
-            id: crypto.randomUUID(),
+            id: createId('norm'),
             title: title,
             sector: sector,
             responsible: responsible,
