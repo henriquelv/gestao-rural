@@ -1,0 +1,72 @@
+import assert from 'node:assert/strict';
+import { mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+const endpoint = process.env.CDP_ENDPOINT || 'http://127.0.0.1:9337';
+const base = process.env.APP_URL || 'http://127.0.0.1:3000';
+const pages = await fetch(`${endpoint}/json/list`).then(r => r.json());
+const page = pages.find(item => item.type === 'page');
+assert.ok(page?.webSocketDebuggerUrl);
+const socket = new WebSocket(page.webSocketDebuggerUrl);
+await new Promise((resolve,reject) => { socket.addEventListener('open',resolve,{once:true}); socket.addEventListener('error',reject,{once:true}); });
+let sequence = 0;
+const pending = new Map();
+socket.addEventListener('message',event => { const data=JSON.parse(String(event.data)); const task=pending.get(data.id); if(!task)return; pending.delete(data.id); data.error?task.reject(new Error(data.error.message)):task.resolve(data.result); });
+const send=(method,params={})=>new Promise((resolve,reject)=>{const id=++sequence;pending.set(id,{resolve,reject});socket.send(JSON.stringify({id,method,params}));});
+const evaluate=async expression=>{const r=await send('Runtime.evaluate',{expression,awaitPromise:true,returnByValue:true});if(r.exceptionDetails)throw new Error(r.exceptionDetails.exception?.description||r.exceptionDetails.text);return r.result?.value;};
+const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+const until=async(expression,label)=>{const start=Date.now();let last;while(Date.now()-start<20000){try{if(await evaluate(`Boolean(${expression})`))return;}catch(error){last=error.message;}await wait(120);}throw new Error(`Timeout: ${label}${last?` (${last})`:''}`);};
+const click=text=>evaluate(`(()=>{const b=[...document.querySelectorAll('button')].find(b=>b.textContent.trim()===${JSON.stringify(text)});if(!b)throw Error('Botão ausente: '+${JSON.stringify(text)});b.click();})()`);
+const input=async(selector,value)=>{await evaluate(`(()=>{const i=document.querySelector(${JSON.stringify(selector)});if(!i)throw Error('Campo ausente');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(i,${JSON.stringify(value)});i.dispatchEvent(new Event('input',{bubbles:true}));})()`);await wait(120);};
+const context={farm_id:'11111111-1111-4111-8111-111111111111',farm_name:'Campo Legado QA',employee_id:'qa-fuel-a',employee_name:'Técnico A',employee_role:'Técnico',device_id:'qa-fuel-offline',is_admin:false};
+const artifacts=await mkdtemp(join(tmpdir(),'campo-legado-fuel-catalog-'));
+const failures=[];
+socket.addEventListener('message',event=>{const e=JSON.parse(String(event.data));if(e.method==='Runtime.exceptionThrown')failures.push(e.params.exceptionDetails.text);});
+try {
+  await send('Page.enable'); await send('Runtime.enable'); await send('Network.enable');
+  await send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});
+  await send('Page.addScriptToEvaluateOnNewDocument',{source:`Object.defineProperty(navigator,'onLine',{get:()=>false}); window.__externalWrites=0; const originalFetch=window.fetch.bind(window); window.fetch=(input,options)=>{const url=new URL(typeof input==='string'?input:input.url,location.href); if(url.origin!==location.origin||url.pathname.startsWith('/api/')){if(options?.method&&options.method!=='GET')window.__externalWrites++;return Promise.reject(new TypeError('QA: external connection blocked'));}return originalFetch(input,options);}; if(!localStorage.getItem('gestao_rural_farm_context_v2'))localStorage.setItem('gestao_rural_farm_context_v2',JSON.stringify(${JSON.stringify(context)})); ['campo_legado_test_period_reset_2026_08_03_v1','campo_legado_remove_legacy_records_v1','error_cleanup_v1'].forEach(k=>localStorage.setItem(k,'true'));`});
+  await send('Page.navigate',{url:`${base}/#/fuelings`});
+  await until(`document.body.textContent.includes('Adicionar veículo')`,'fueling screen');
+  await evaluate(`(async()=>{const {localdb}=await import('/services/localdb.ts');const now=new Date().toISOString();for(const id of ['qa-fuel-a','qa-fuel-b'])await localdb.put('employees',{id,data:{id,name:id==='qa-fuel-a'?'Técnico A':'Técnico B',role:'Técnico',status:'active',farm_id:${JSON.stringify(context.farm_id)}},synced:true,updated_at:now});await localdb.put('fuel_vehicles',{id:'vehicle-other-b',data:{id:'vehicle-other-b',name:'Veículo privado B',plate:'BBB1234',farm_id:${JSON.stringify(context.farm_id)},employee_id:'qa-fuel-b',createdAt:now},synced:true,updated_at:now});await localdb.put('fuel_stations',{id:'station-other-b',data:{id:'station-other-b',name:'Posto privado B',farm_id:${JSON.stringify(context.farm_id)},employee_id:'qa-fuel-b',createdAt:now},synced:true,updated_at:now});})()`);
+  await send('Page.reload',{ignoreCache:true});
+  await until(`document.body.textContent.includes('Adicionar veículo')&&!document.querySelector('button[aria-haspopup="dialog"]').disabled`,'offline form ready');
+  await click('Adicionar veículo');await until(`document.querySelector('[role="dialog"] input')`,'vehicle drawer');
+  await input('[role="dialog"] input','Corolla QA');await input('[role="dialog"] input[placeholder="ABC1D23"]','abc-1234');
+  const screenshot=await send('Page.captureScreenshot',{format:'png'});await writeFile(join(artifacts,'vehicle-mobile.png'),Buffer.from(screenshot.data,'base64'));
+  await click('Salvar veículo');await until(`!document.querySelector('[role="dialog"]')&&document.querySelector('input[aria-label="Placa do veículo"]').value==='ABC1234'`,'automatic plate');
+  await click('Adicionar posto');await until(`document.querySelector('[role="dialog"] input')`,'station drawer');
+  await input('[role="dialog"] input','Posto Central QA');await input('[role="dialog"] input[placeholder="Rua, número ou referência"]','Rua da Fazenda, 100');await click('Salvar posto');
+  await until(`!document.querySelector('[role="dialog"]')&&document.body.textContent.includes('Posto Central QA')`,'station saved');
+  await evaluate(`document.querySelectorAll('button[aria-haspopup="dialog"]')[0].click()`);await until(`document.querySelector('[role="dialog"] input[type="search"]')`,'vehicle search');
+  assert.equal(await evaluate(`document.querySelector('[role="dialog"]').textContent.includes('Veículo privado B')`),false);
+  await input('[role="dialog"] input[type="search"]','ABC1234');await until(`document.querySelector('[role="dialog"]').textContent.includes('Corolla QA')`,'plate search');
+  await evaluate(`[...document.querySelectorAll('[role="dialog"] button')].find(b=>b.textContent.includes('Corolla QA')).click()`);
+  await input('input[placeholder="0,0 km"]','12345');await input('input[placeholder="0,00"]','638');
+  await evaluate(`(()=>{const i=document.querySelectorAll('input[placeholder="0,00"]')[1];Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(i,'10000');i.dispatchEvent(new Event('input',{bubbles:true}));})()`);await wait(180);
+  await click('Salvar abastecimento');await until(`document.body.textContent.includes('Exportar todos em CSV')&&document.body.textContent.includes('Corolla QA')`,'fueling saved');
+  const stored=await evaluate(`(async()=>{const {localdb}=await import('/services/localdb.ts');return {fuelings:await localdb.getAll('fuelings'),vehicles:await localdb.getAll('fuel_vehicles'),stations:await localdb.getAll('fuel_stations'),outbox:await localdb.getPendingOutbox()};})()`);
+  const fueling=stored.fuelings.find(r=>r.vehicle==='Corolla QA');assert.ok(fueling?.vehicleId);assert.equal(fueling.vehiclePlate,'ABC1234');assert.ok(fueling.stationId);assert.equal(fueling.totalValue,100);assert.equal(fueling.driverName,'Técnico A');
+  assert.ok(stored.outbox.some(r=>r.tableName==='fuel_vehicles'));assert.ok(stored.outbox.some(r=>r.tableName==='fuel_stations'));
+  await send('Browser.setDownloadBehavior',{behavior:'allow',downloadPath:artifacts});await click('Exportar todos em CSV');
+  let csv;for(let i=0;i<100;i++){csv=(await readdir(artifacts)).find(file=>file.endsWith('.csv'));if(csv)break;await wait(100);}assert.ok(csv);const content=await readFile(join(artifacts,csv),'utf8');assert.ok(content.includes('"Placa"'));assert.ok(content.includes('ABC1234'));assert.ok(content.includes('Posto Central QA'));
+  await evaluate(`(async()=>{const {farmContextService}=await import('/services/farm-context.service.ts');farmContextService.saveContext({...${JSON.stringify(context)},employee_id:'qa-fuel-b',employee_name:'Técnico B'});})()`);
+  await send('Page.reload',{ignoreCache:true});await until(`document.body.textContent.includes('Adicionar veículo')&&!document.querySelector('button[aria-haspopup="dialog"]').disabled`,'profile B');
+  await evaluate(`document.querySelectorAll('button[aria-haspopup="dialog"]')[0].click()`);await until(`document.querySelector('[role="dialog"] input[type="search"]')`,'B search');
+  assert.equal(await evaluate(`document.querySelector('[role="dialog"]').textContent.includes('Corolla QA')`),false);assert.equal(await evaluate(`document.querySelector('[role="dialog"]').textContent.includes('Veículo privado B')`),true);
+  await evaluate(`document.querySelector('button[aria-label="Fechar busca"]').click()`);
+  const b=await evaluate(`(async()=>{const {db}=await import('/services/db.service.ts');return {vehicles:await db.getFuelVehicles(),stations:await db.getFuelStations(),fuelings:await db.getFuelings()};})()`);assert.equal(b.vehicles.length,1);assert.equal(b.stations.length,1);assert.equal(b.fuelings.length,0);
+  await evaluate(`(async()=>{const {farmContextService}=await import('/services/farm-context.service.ts');farmContextService.saveContext(${JSON.stringify(context)});})()`);await send('Page.reload',{ignoreCache:true});
+  await until(`document.body.textContent.includes('Adicionar veículo')&&!document.querySelector('button[aria-haspopup="dialog"]').disabled`,'A reopens offline');
+  const again=await evaluate(`(async()=>{const {db}=await import('/services/db.service.ts');return {vehicles:await db.getFuelVehicles(),stations:await db.getFuelStations()};})()`);assert.equal(again.vehicles[0].plate,'ABC1234');assert.equal(again.stations[0].name,'Posto Central QA');
+  assert.equal(await evaluate('window.__externalWrites'),0);assert.deepEqual(failures,[]);
+  console.log(JSON.stringify({ok:true,mobile:'390×844',offlineCreation:true,automaticPlate:true,searchByPlate:true,privateCatalogs:true,reopenPreservesCatalog:true,csvIncludesPlate:true,outboxQueuesCatalogs:true,externalWrites:false,screenshot:join(artifacts,'vehicle-mobile.png')}));
+} catch (error) {
+  console.error(await evaluate(`JSON.stringify({url:location.href,body:document.body?.innerText.slice(0,1800),errors:localStorage.getItem('last_runtime_error')})`).catch(()=>'')); console.error(failures);
+  throw error;
+} finally {
+  // Perfil de browser exclusivo do teste. Limpa suas fixtures ainda offline.
+  await send('Storage.clearDataForOrigin',{origin:base,storageTypes:'all'}).catch(()=>undefined);
+  socket.close();
+}

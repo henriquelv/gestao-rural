@@ -32,6 +32,8 @@ export class WebFarmDatabase extends Dexie {
   clients!: Table<LocalRecord>;
   appointments!: Table<LocalRecord>;
   fuelings!: Table<LocalRecord>;
+  fuel_vehicles!: Table<LocalRecord>;
+  fuel_stations!: Table<LocalRecord>;
   sectors!: Table<LocalRecord>;
   anomalies!: Table<LocalRecord>;
   instructions!: Table<LocalRecord>;
@@ -74,6 +76,10 @@ export class WebFarmDatabase extends Dexie {
     });
     (this as any).version(5).stores({
       fuelings: 'id, synced, updated_at'
+    });
+    (this as any).version(6).stores({
+      fuel_vehicles: 'id, synced, updated_at',
+      fuel_stations: 'id, synced, updated_at'
     });
   }
 }

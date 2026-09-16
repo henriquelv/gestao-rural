@@ -6,6 +6,8 @@ import { db } from './db.service';
 import { MediaItem } from '../types';
 import { activationService } from './activation.service';
 import { farmContextService } from './farm-context.service';
+import { fuelCatalogTables, requestFuelCatalog } from './fuel-catalog-api.service';
+import { ownsFuelCatalog } from '../utils/fuel-catalog';
 
 const guessExt = (m: MediaItem) => {
   const mime = m.mimeType || '';
@@ -123,8 +125,8 @@ export const syncService = {
 
   repairPayloadContext(payload: any, tableName: string): any {
     if (!payload || typeof payload !== 'object') return payload;
-    const farmScoped = ['employees', 'appointments', 'fuelings', 'anomalies', 'instructions', 'notices', 'improvements', 'farm_docs', 'milk_daily', 'daily_metrics', 'farm_monthly_stats', 'sectors', 'settings', 'farm_settings'];
-    const metadataTables = ['appointments', 'fuelings', 'anomalies', 'instructions', 'notices', 'improvements', 'farm_docs', 'milk_daily', 'daily_metrics', 'farm_monthly_stats'];
+    const farmScoped = ['employees', 'appointments', 'fuelings', 'fuel_vehicles', 'fuel_stations', 'anomalies', 'instructions', 'notices', 'improvements', 'farm_docs', 'milk_daily', 'daily_metrics', 'farm_monthly_stats', 'sectors', 'settings', 'farm_settings'];
+    const metadataTables = ['appointments', 'fuelings', 'fuel_vehicles', 'fuel_stations', 'anomalies', 'instructions', 'notices', 'improvements', 'farm_docs', 'milk_daily', 'daily_metrics', 'farm_monthly_stats'];
     if (!farmScoped.includes(tableName)) return payload;
 
     const ctx = farmContextService.getContext();
@@ -243,6 +245,9 @@ export const syncService = {
 
     try {
       for (const item of pendingItems) {
+        // Cadastros particulares pendentes de outro perfil ficam na fila ate
+        // o dono entrar novamente; nunca sao enviados com a identidade atual.
+        if (fuelCatalogTables.has(item.tableName) && !ownsFuelCatalog(item.payload || {}, farmContextService.getContext())) continue;
         try {
           const repairedPayload = this.repairPayloadContext(item.payload, item.tableName);
           if (item.id && repairedPayload !== item.payload) {
@@ -403,6 +408,10 @@ export const syncService = {
   },
 
   async processItem(item: any) {
+    if (fuelCatalogTables.has(item.tableName)) {
+      await requestFuelCatalog(item.tableName, { op: item.op, payload: item.payload });
+      return;
+    }
     const remoteTableName = item.tableName === 'settings' ? 'farm_settings' : item.tableName;
     const table = supabase.from(remoteTableName);
     let result;

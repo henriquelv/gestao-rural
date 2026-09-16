@@ -66,10 +66,9 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
 
-  // Respostas protegidas do BI nunca entram no Cache Storage compartilhado.
-  // O aplicativo mantém apenas o último painel agregado no armazenamento local
-  // e somente a tela com proteção administrativa consegue lê-lo.
-  if (url.pathname.startsWith('/api/rumina/')) {
+  // APIs protegidas nunca entram no Cache Storage compartilhado entre perfis.
+  // Dados disponíveis offline são guardados e filtrados pelo próprio aplicativo.
+  if (url.pathname.startsWith('/api/')) {
     event.respondWith(fetch(request));
     return;
   }

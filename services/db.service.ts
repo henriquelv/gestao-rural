@@ -1,5 +1,5 @@
 
-import { Anomaly, Appointment, Fueling, Instruction, Notice, Improvement, FarmDoc, DailyMilk, MonthlyStats, Employee, Client, FarmSettings, UIConfig, UIBlock, DailyMetric, Sector } from '../types';
+import { Anomaly, Appointment, Fueling, FuelVehicle, FuelStation, Instruction, Notice, Improvement, FarmDoc, DailyMilk, MonthlyStats, Employee, Client, FarmSettings, UIConfig, UIBlock, DailyMetric, Sector } from '../types';
 import { isSupabaseConfigured, supabase } from './supabase';
 import { notify } from './notification.service';
 import { localdb } from './localdb';
@@ -7,6 +7,8 @@ import { syncService } from './sync.service';
 import { mediaService } from './media.service';
 import { farmContextService } from './farm-context.service';
 import { ADMIN_PROFILE, CLIENTS, LOCAL_LEGACY_CLEANUP_FLAG, LOCAL_PROFILES } from '../constants/work-orders';
+import { fuelCatalogTables, requestFuelCatalog } from './fuel-catalog-api.service';
+import { normalizeCatalogName, normalizePlate, ownsFuelCatalog, validateFuelCatalog } from '../utils/fuel-catalog';
 
 const isOnline = () => navigator.onLine && isSupabaseConfigured;
 const nowISO = () => new Date().toISOString();
@@ -124,6 +126,8 @@ const farmScopedTables = new Set([
   'clients',
   'appointments',
   'fuelings',
+  'fuel_vehicles',
+  'fuel_stations',
   'anomalies',
   'instructions',
   'notices',
@@ -140,6 +144,8 @@ const configOnlyTables = new Set(['ui_config', 'farm_settings', 'settings', 'sec
 const metadataTables = new Set([
   'appointments',
   'fuelings',
+  'fuel_vehicles',
+  'fuel_stations',
   'anomalies',
   'instructions',
   'notices',
@@ -177,6 +183,9 @@ const localRecordId = (tableName: string, row: any) => {
 };
 
 const filterByCurrentFarm = <T>(tableName: string, rows: T[]): T[] => {
+  if (fuelCatalogTables.has(tableName)) {
+    return rows.filter(row => ownsFuelCatalog(row as FuelVehicle | FuelStation, farmContextService.getContext()));
+  }
   const currentFarmId = farmContextService.getFarmId();
   if (!currentFarmId || !farmScopedTables.has(tableName)) return rows;
   // Aceita registros sem farm_id (legado anterior à coluna) E da fazenda atual
@@ -269,6 +278,24 @@ const DEFAULT_EMPLOYEES_LIST: Employee[] = LOCAL_PROFILES;
 
 async function refreshFromServer(tableName: string): Promise<boolean> {
   if (!isOnline()) return false;
+
+  if (fuelCatalogTables.has(tableName)) {
+    const ctx = farmContextService.getContext();
+    try {
+      const result = await requestFuelCatalog(tableName);
+      const current = farmContextService.getContext();
+      if (!ctx || current?.farm_id !== ctx.farm_id || current.employee_id !== ctx.employee_id) return false;
+      if (!Array.isArray(result.items)) return false;
+      const records = [];
+      for (const row of result.items.filter((item: FuelVehicle | FuelStation) => ownsFuelCatalog(item, ctx))) {
+        const raw = await localdb.getRawById(tableName, row.id);
+        if (raw?.synced === false) continue;
+        records.push({ id: row.id, data: row, updated_at: nowISO(), synced: true });
+      }
+      if (records.length) await localdb.bulkPut(tableName, records);
+      return true;
+    } catch { return false; }
+  }
 
   resetRefreshMarkersForScopeChange();
 
@@ -452,7 +479,7 @@ async function smartRead<T>(tableName: string, fallbackData: T[], orderByField?:
     }
 
     if (localData.length === 0) {
-      if (isOnline() && !serverSyncAttempted) {
+      if (isOnline() && !serverSyncAttempted && !fuelCatalogTables.has(tableName)) {
         let q = supabase.from(tableName).select('*');
         if (currentFarmId && farmScopedTables.has(tableName)) {
           q = configOnlyTables.has(tableName)
@@ -577,7 +604,7 @@ async function migrateRaspagemToConforto() {
 // Ocorre quando o app trava entre a escrita local e a escrita no outbox.
 // Os registros ficam visíveis localmente mas nunca sobem pro servidor.
 async function recoverOrphanedRecords(): Promise<void> {
-  const tables = ['employees', 'appointments', 'fuelings', 'anomalies', 'instructions', 'notices', 'improvements', 'farm_docs',
+  const tables = ['employees', 'appointments', 'fuelings', 'fuel_vehicles', 'fuel_stations', 'anomalies', 'instructions', 'notices', 'improvements', 'farm_docs',
     'daily_metrics', 'milk_daily'];
   try {
     const pending = await localdb.getPendingOutbox();
@@ -890,7 +917,7 @@ export const db = {
       if (!isOnline()) return;
       const tables = [
         'ui_config', 'sectors', 'employees', 'clients',
-        'appointments', 'fuelings', 'anomalies', 'instructions', 'notices', 'improvements', 'farm_docs',
+        'appointments', 'fuelings', 'fuel_vehicles', 'fuel_stations', 'anomalies', 'instructions', 'notices', 'improvements', 'farm_docs',
         'milk_daily', 'daily_metrics', 'farm_monthly_stats'
       ];
       const scope = getRefreshScope();
@@ -924,7 +951,7 @@ export const db = {
       if (!isOnline()) return;
       const tables = [
         'ui_config', 'sectors', 'employees', 'clients',
-        'appointments', 'fuelings', 'anomalies', 'instructions', 'notices', 'improvements', 'farm_docs',
+        'appointments', 'fuelings', 'fuel_vehicles', 'fuel_stations', 'anomalies', 'instructions', 'notices', 'improvements', 'farm_docs',
         'milk_daily', 'daily_metrics', 'farm_monthly_stats'
       ];
       tables.forEach(clearLastRefresh);
@@ -1098,6 +1125,26 @@ export const db = {
     return smartWrite('appointments', id, 'delete');
   },
 
+  getFuelVehicles: async (): Promise<FuelVehicle[]> => smartRead<FuelVehicle>('fuel_vehicles', []),
+  getFuelStations: async (): Promise<FuelStation[]> => smartRead<FuelStation>('fuel_stations', []),
+  addFuelVehicle: async (vehicle: FuelVehicle) => {
+    if (!ownsFuelCatalog(vehicle, farmContextService.getContext())) throw new Error('Você só pode cadastrar seus veículos.');
+    const name = normalizeCatalogName(vehicle.name), plate = normalizePlate(vehicle.plate);
+    const validation = validateFuelCatalog('vehicle', name, plate);
+    if (validation) throw new Error(validation);
+    const rows = await db.getFuelVehicles();
+    if (rows.some(row => plate ? row.plate === plate : row.name.toLocaleLowerCase('pt-BR') === name.toLocaleLowerCase('pt-BR'))) throw new Error('Este veículo já está na sua lista.');
+    return smartWrite('fuel_vehicles', { ...vehicle, name, plate }, 'upsert');
+  },
+  addFuelStation: async (station: FuelStation) => {
+    if (!ownsFuelCatalog(station, farmContextService.getContext())) throw new Error('Você só pode cadastrar seus postos.');
+    const name = normalizeCatalogName(station.name), address = normalizeCatalogName(station.address || '');
+    const validation = validateFuelCatalog('station', name, address);
+    if (validation) throw new Error(validation);
+    const rows = await db.getFuelStations();
+    if (rows.some(row => row.name.toLocaleLowerCase('pt-BR') === name.toLocaleLowerCase('pt-BR'))) throw new Error('Este posto já está na sua lista.');
+    return smartWrite('fuel_stations', { ...station, name, address }, 'upsert');
+  },
   getFuelings: async (): Promise<Fueling[]> => (
     await smartRead<Fueling>('fuelings', [], 'date')
   ).filter(canReadFueling),

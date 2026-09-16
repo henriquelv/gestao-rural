@@ -268,6 +268,30 @@ export interface Appointment {
   updated_at?: string;
 }
 
+export interface FuelVehicle {
+  id: string;
+  farm_id?: string;
+  employee_id: string;
+  employee_name?: string;
+  device_id?: string;
+  name: string;
+  plate: string;
+  createdAt: string;
+  updated_at?: string;
+}
+
+export interface FuelStation {
+  id: string;
+  farm_id?: string;
+  employee_id: string;
+  employee_name?: string;
+  device_id?: string;
+  name: string;
+  address?: string;
+  createdAt: string;
+  updated_at?: string;
+}
+
 export interface Fueling {
   id: string;
   farm_id?: string;
@@ -275,6 +299,8 @@ export interface Fueling {
   employee_name?: string;
   device_id?: string;
   vehicle: string;
+  vehicleId?: string;
+  vehiclePlate?: string;
   date: string;
   time: string;
   odometer: number;
@@ -284,6 +310,7 @@ export interface Fueling {
   liters: number;
   fullTank: boolean;
   station?: string;
+  stationId?: string;
   driverId?: string;
   driverName: string;
   notes?: string;

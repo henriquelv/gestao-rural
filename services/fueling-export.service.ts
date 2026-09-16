@@ -9,10 +9,10 @@ const cell=(value:unknown)=>`"${String(value??'').replace(/^([=+@\-\t\r])/,"'$1"
 const decimal=(value:number,digits=2)=>value.toLocaleString('pt-BR',{minimumFractionDigits:digits,maximumFractionDigits:digits});
 
 export async function exportFuelingsCsv(rows:Fueling[]):Promise<string>{
-  const header=['Data','Hora','Veículo','Hodômetro (km)','Combustível','Preço por litro (R$)','Valor total (R$)','Litros','Tanque completo','Posto','Motorista','Observações','Lançado por'];
+  const header=['Data','Hora','Veículo','Placa','Hodômetro (km)','Combustível','Preço por litro (R$)','Valor total (R$)','Litros','Tanque completo','Posto','Motorista','Observações','Lançado por'];
   const ordered=[...rows].sort((a,b)=>`${a.date} ${a.time}`.localeCompare(`${b.date} ${b.time}`));
   const lines=[header,...ordered.map(item=>[
-    item.date.split('-').reverse().join('/'),item.time,item.vehicle,decimal(item.odometer,1),fuelLabels[item.fuelType]||item.fuelType,
+    item.date.split('-').reverse().join('/'),item.time,item.vehicle,item.vehiclePlate||'',decimal(item.odometer,1),fuelLabels[item.fuelType]||item.fuelType,
     decimal(item.pricePerLiter,3),decimal(item.totalValue),decimal(item.liters,3),item.fullTank?'Sim':'Não',item.station||'',item.driverName,item.notes||'',item.employee_name||''
   ])].map(row=>row.map(cell).join(';'));
   const csv='\uFEFF'+lines.join('\r\n');

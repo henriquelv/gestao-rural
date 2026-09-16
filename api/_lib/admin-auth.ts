@@ -3,6 +3,7 @@ import { headerValue } from './http.js';
 
 type EmployeeRow = {
   id: string | number;
+  name?: string;
   role?: string | null;
   is_admin?: boolean | null;
   status?: string | null;
@@ -13,7 +14,7 @@ type EmployeeRow = {
 const clean = (value: string) => value.trim();
 const normalized = (value?: string | null) => (value || '').trim().toLocaleLowerCase('pt-BR');
 
-export const requireAppUser = async (req: ApiRequest): Promise<{ isAdmin: boolean }> => {
+export const requireAppUser = async (req: ApiRequest): Promise<{ isAdmin: boolean; farmId: string; employeeId: string; employeeName: string }> => {
   const farmId = clean(headerValue(req.headers['x-campo-farm-id']));
   const employeeId = clean(headerValue(req.headers['x-campo-employee-id']));
   const suppliedPin = headerValue(req.headers['x-campo-admin-pin']);
@@ -27,7 +28,7 @@ export const requireAppUser = async (req: ApiRequest): Promise<{ isAdmin: boolea
   const params = new URLSearchParams({
     farm_id: `eq.${farmId}`,
     id: `eq.${employeeId}`,
-    select: 'id,role,is_admin,status,admin_pin,access_pin',
+    select: 'id,name,role,is_admin,status,admin_pin,access_pin',
     limit: '1'
   });
   const response = await fetch(`${supabaseUrl.replace(/\/$/, '')}/rest/v1/employees?${params}`, {
@@ -62,7 +63,7 @@ export const requireAppUser = async (req: ApiRequest): Promise<{ isAdmin: boolea
   if (!employee || !isActive || (!validPin && !validDevice)) {
     throw new Error('FORBIDDEN');
   }
-  return { isAdmin };
+  return { isAdmin, farmId, employeeId, employeeName: employee.name || '' };
 };
 
 export const requireAppAdministrator = async (req: ApiRequest): Promise<void> => {

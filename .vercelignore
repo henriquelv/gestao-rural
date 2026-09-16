@@ -8,6 +8,7 @@ dist/
 .claude/
 .tmp-chrome-*/
 .tmp-edge-*/
+.tmp-fuel-catalog-qa/
 .git/
 .env*
 *-credentials.txt
