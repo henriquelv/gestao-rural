@@ -52,7 +52,13 @@ export const FuelingScreen:React.FC=()=>{
     catch(error){console.error(error);notify('Não foi possível carregar os abastecimentos.','error');}
     finally{setLoading(false);}
   };
-  useEffect(()=>{void load();const unsubscribe=['fuelings','fuel_vehicles','fuel_stations'].map(table=>localdb.subscribe(table,()=>void load()));return()=>unsubscribe.forEach(stop=>stop());},[]);
+  useEffect(()=>{
+    void load();
+    let scheduled:number|undefined;
+    const refresh=()=>{window.clearTimeout(scheduled);scheduled=window.setTimeout(()=>void load(),80);};
+    const unsubscribe=['fuelings','fuel_vehicles','fuel_stations'].map(table=>localdb.subscribe(table,refresh));
+    return()=>{window.clearTimeout(scheduled);unsubscribe.forEach(stop=>stop());};
+  },[]);
 
   const vehicleOptions=vehicles.map(vehicle=>({value:vehicle.id,label:vehicle.name,description:vehicle.plate||'Sem placa informada'}));
   const vehicleValue=form.vehicleId|| (editingId&&form.vehicle?`legacy:${editingId}`:'');
@@ -102,7 +108,7 @@ export const FuelingScreen:React.FC=()=>{
   const staffOptions=(isAdmin?employees:employees.filter(item=>String(item.id)===String(context?.employee_id))).map(item=>({value:String(item.id),label:item.name,description:item.role||'Técnico'}));
 
   return <Layout className="bg-[#f4f0e7]"><Header title="Abastecimentos" targetRoute="/" />
-    <main className="min-h-0 flex-1 overflow-y-auto pb-[calc(2rem+env(safe-area-inset-bottom))]">
+    <main className="min-h-0 flex-1 touch-pan-y overflow-y-auto overscroll-contain pb-[calc(2rem+env(safe-area-inset-bottom))] [-webkit-overflow-scrolling:touch]">
       <section className="relative overflow-hidden bg-[#173f32] px-5 pb-5 pt-4 text-white"><div className="absolute -right-8 -top-10 h-36 w-36 rounded-full border border-white/10 shadow-[0_0_0_24px_rgba(255,255,255,0.025)]" />
         <div className="relative flex items-center justify-between"><div><p className="text-[9px] font-black uppercase tracking-[0.18em] text-[#d9b74c]">Controle de combustível</p><h1 className="campo-display mt-1 text-[27px]">Abastecimentos</h1></div><span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#d9b74c] text-[#173f32]"><Fuel size={25}/></span></div>
         <div className="relative mt-4 grid grid-cols-3 divide-x divide-white/10 rounded-2xl border border-white/10 bg-white/[0.06] py-3"><div className="px-3"><span className="text-[8px] font-bold uppercase text-white/45">Total</span><strong className="mt-1 block truncate text-sm">{money.format(summary.total)}</strong></div><div className="px-3"><span className="text-[8px] font-bold uppercase text-white/45">Litros</span><strong className="mt-1 block text-sm">{decimal(summary.liters,2)}</strong></div><div className="px-3"><span className="text-[8px] font-bold uppercase text-white/45">Média/L</span><strong className="mt-1 block truncate text-sm">{money.format(summary.average)}</strong></div></div>

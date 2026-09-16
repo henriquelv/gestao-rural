@@ -466,7 +466,11 @@ async function smartRead<T>(tableName: string, fallbackData: T[], orderByField?:
       serverSyncAttempted = true;
       smartReadHydratedKeys.add(hydrationKey); // marca antes do async para evitar dupla chamada
       clearLastRefresh(tableName);
-      if (localData.length === 0 || alwaysFreshTables.has(tableName)) {
+      if (fuelCatalogTables.has(tableName)) {
+        // Veículos e postos são auxiliares do formulário: nunca seguram a tela
+        // esperando rede. O cache aparece na hora e a lista se atualiza ao chegar.
+        void refreshFromServer(tableName).catch(e => console.error(`[smartRead] bg refresh ${tableName}:`, e));
+      } else if (localData.length === 0 || alwaysFreshTables.has(tableName)) {
         // Sem cache, ou tabela pequena/crítica como funcionários: espera servidor
         // para não renderizar lista antiga quando outro aparelho cadastrou alguém.
         await refreshFromServer(tableName);
@@ -917,7 +921,7 @@ export const db = {
       if (!isOnline()) return;
       const tables = [
         'ui_config', 'sectors', 'employees', 'clients',
-        'appointments', 'fuelings', 'fuel_vehicles', 'fuel_stations', 'anomalies', 'instructions', 'notices', 'improvements', 'farm_docs',
+        'appointments', 'fuelings', 'anomalies', 'instructions', 'notices', 'improvements', 'farm_docs',
         'milk_daily', 'daily_metrics', 'farm_monthly_stats'
       ];
       const scope = getRefreshScope();
@@ -951,7 +955,7 @@ export const db = {
       if (!isOnline()) return;
       const tables = [
         'ui_config', 'sectors', 'employees', 'clients',
-        'appointments', 'fuelings', 'fuel_vehicles', 'fuel_stations', 'anomalies', 'instructions', 'notices', 'improvements', 'farm_docs',
+        'appointments', 'fuelings', 'anomalies', 'instructions', 'notices', 'improvements', 'farm_docs',
         'milk_daily', 'daily_metrics', 'farm_monthly_stats'
       ];
       tables.forEach(clearLastRefresh);
