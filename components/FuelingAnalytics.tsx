@@ -1,13 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { BarChart3, Check, Gauge, LineChart, UsersRound } from 'lucide-react';
 import type { Employee, Fueling } from '../types';
+import { fuelingEmployeeKey, summarizeFuelings } from '../utils/fueling-analytics';
 
 const money = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
 const number = (value: number, digits = 1) => value.toLocaleString('pt-BR', { minimumFractionDigits: digits, maximumFractionDigits: digits });
-const employeeKey = (item: Fueling) => String(item.driverId || item.employee_id || item.driverName);
-const vehicleKey = (item: Fueling) => item.vehicleId || `${item.employee_id || ''}:${item.vehicle.trim().toLocaleLowerCase('pt-BR')}`;
-
-type Mileage = { km: number; efficiencyKm: number; efficiencyLiters: number };
 type Metric = 'km' | 'liters' | 'total' | 'price' | 'efficiency';
 
 const metricConfig: Record<Metric, { label: string; shortLabel: string; color: string; format: (value: number) => string }> = {
@@ -16,45 +13,6 @@ const metricConfig: Record<Metric, { label: string; shortLabel: string; color: s
   total: { label: 'Valor abastecido', shortLabel: 'Valor', color: '#9f3f2d', format: value => money.format(value) },
   price: { label: 'Preço médio por litro', shortLabel: 'Preço/L', color: '#59775e', format: value => money.format(value) },
   efficiency: { label: 'Média de consumo', shortLabel: 'Km/L', color: '#19708a', format: value => `${number(value, 2)} km/L` }
-};
-
-const buildMileage = (rows: Fueling[]) => {
-  const byVehicle = new Map<string, Fueling[]>();
-  rows.forEach(item => {
-    const key = vehicleKey(item);
-    byVehicle.set(key, [...(byVehicle.get(key) || []), item]);
-  });
-  const result = new Map<string, Mileage>();
-  byVehicle.forEach(items => {
-    const ordered = [...items].sort((a, b) => `${a.date} ${a.time}`.localeCompare(`${b.date} ${b.time}`));
-    ordered.forEach((item, index) => {
-      const previous = ordered[index - 1];
-      const km = previous ? Number(item.odometer) - Number(previous.odometer) : 0;
-      const validKm = Number.isFinite(km) && km > 0 ? km : 0;
-      const validEfficiency = validKm > 0 && Boolean(item.fullTank && previous?.fullTank) && Number(item.liters) > 0;
-      result.set(item.id, { km: validKm, efficiencyKm: validEfficiency ? validKm : 0, efficiencyLiters: validEfficiency ? Number(item.liters) : 0 });
-    });
-  });
-  return result;
-};
-
-export const summarizeFuelings = (allRows: Fueling[], rows: Fueling[]) => {
-  const mileage = buildMileage(allRows);
-  const total = rows.reduce((sum, item) => sum + Number(item.totalValue || 0), 0);
-  const liters = rows.reduce((sum, item) => sum + Number(item.liters || 0), 0);
-  const km = rows.reduce((sum, item) => sum + (mileage.get(item.id)?.km || 0), 0);
-  const efficiencyKm = rows.reduce((sum, item) => sum + (mileage.get(item.id)?.efficiencyKm || 0), 0);
-  const efficiencyLiters = rows.reduce((sum, item) => sum + (mileage.get(item.id)?.efficiencyLiters || 0), 0);
-  return {
-    total,
-    liters,
-    km,
-    price: liters > 0 ? total / liters : 0,
-    efficiency: efficiencyLiters > 0 ? efficiencyKm / efficiencyLiters : 0,
-    ticket: rows.length > 0 ? total / rows.length : 0,
-    count: rows.length,
-    validEfficiencyCount: rows.filter(item => (mileage.get(item.id)?.efficiencyLiters || 0) > 0).length
-  };
 };
 
 type Props = {
@@ -70,11 +28,10 @@ export const FuelingAnalytics: React.FC<Props> = ({ allRows, rows, employees, is
   const [trendMetric, setTrendMetric] = useState<Metric>('price');
   const [selectedEmployees, setSelectedEmployees] = useState<string[]>([]);
   const initialized = useRef(false);
-  const mileage = useMemo(() => buildMileage(allRows), [allRows]);
   const employeeOptions = useMemo(() => {
     const names = new Map(employees.map(item => [String(item.id), item.name]));
-    allRows.forEach(item => names.set(employeeKey(item), item.driverName || item.employee_name || names.get(employeeKey(item)) || 'Funcionário'));
-    const used = new Set(allRows.map(employeeKey));
+    allRows.forEach(item => names.set(fuelingEmployeeKey(item), item.driverName || item.employee_name || names.get(fuelingEmployeeKey(item)) || 'Funcionário'));
+    const used = new Set(allRows.map(fuelingEmployeeKey));
     return [...names.entries()].filter(([id]) => used.has(id)).map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
   }, [allRows, employees]);
 
@@ -88,10 +45,10 @@ export const FuelingAnalytics: React.FC<Props> = ({ allRows, rows, employees, is
   const toggleEmployee = (id: string) => setSelectedEmployees(current => current.includes(id)
     ? (current.length > 1 ? current.filter(item => item !== id) : current)
     : [...current, id]);
-  const selectedRows = useMemo(() => rows.filter(item => selectedEmployees.includes(employeeKey(item))), [rows, selectedEmployees]);
+  const selectedRows = useMemo(() => rows.filter(item => selectedEmployees.includes(fuelingEmployeeKey(item))), [rows, selectedEmployees]);
   const selectedSummary = useMemo(() => summarizeFuelings(allRows, selectedRows), [allRows, selectedRows]);
   const comparison = useMemo(() => employeeOptions.filter(option => selectedEmployees.includes(option.id)).map(option => {
-    const employeeRows = rows.filter(item => employeeKey(item) === option.id);
+    const employeeRows = rows.filter(item => fuelingEmployeeKey(item) === option.id);
     const summary = summarizeFuelings(allRows, employeeRows);
     return { ...option, ...summary };
   }), [allRows, employeeOptions, rows, selectedEmployees]);

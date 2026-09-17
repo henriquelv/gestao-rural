@@ -5,7 +5,7 @@ import { Header } from '../components/Header';
 import { Layout } from '../components/Layout';
 import { SearchableSelect } from '../components/SearchableSelect';
 import { FuelCatalogDialog } from '../components/FuelCatalogDialog';
-import { FuelingAnalytics, summarizeFuelings } from '../components/FuelingAnalytics';
+import { FuelingAnalytics } from '../components/FuelingAnalytics';
 import { db } from '../services/db.service';
 import { exportFuelingsCsv } from '../services/fueling-export.service';
 import { farmContextService } from '../services/farm-context.service';
@@ -15,6 +15,7 @@ import { permissionsService } from '../services/permissions.service';
 import type { Employee, Fueling, FuelVehicle, FuelStation } from '../types';
 import { formatAutomaticCents, parseCurrency } from '../utils/work-orders';
 import { createId } from '../utils/id';
+import { summarizeFuelings } from '../utils/fueling-analytics';
 
 const fuelOptions:Array<{value:Fueling['fuelType'];label:string}>=[
   {value:'gasolina_comum',label:'Gasolina comum'},{value:'gasolina_aditivada',label:'Gasolina aditivada'},{value:'etanol',label:'Etanol'},
