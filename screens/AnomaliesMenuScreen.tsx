@@ -40,8 +40,8 @@ export const AnomaliesMenuScreen: React.FC = () => {
     <Layout className="bg-[#f4f0e7]">
       <Header title="Ordem de Serviço (OS)" targetRoute="/" />
 
-      <div className="campo-field-lines min-h-0 flex-1 overflow-y-auto px-4 pb-8 pt-5">
-        <div className="space-y-4">
+      <div className="campo-field-lines min-h-0 flex-1 overflow-y-auto px-4 pb-8 pt-5 md:px-6 md:pt-6">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
           {buttons.map((button) => {
             const isCreate = button.route.startsWith('/anomalies/add');
             const isDashboard = button.route === '/anomalies/clients';

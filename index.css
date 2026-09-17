@@ -33,6 +33,40 @@ button {
   -webkit-tap-highlight-color: transparent;
 }
 
+button:not(:disabled) {
+  cursor: pointer;
+  touch-action: manipulation;
+  transition-property: transform, filter, box-shadow, background-color, border-color, opacity !important;
+  transition-duration: 140ms !important;
+  transition-timing-function: cubic-bezier(0.2, 0.75, 0.25, 1) !important;
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
+
+button:not(:disabled):active,
+button.campo-pressed:not(:disabled) {
+  transform: translateY(1px) scale(0.975) !important;
+  filter: brightness(0.96);
+  box-shadow: inset 0 2px 5px rgba(13, 47, 37, 0.18) !important;
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 3px solid rgba(63, 116, 87, 0.32);
+  outline-offset: 2px;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  button:not(:disabled):hover {
+    filter: brightness(1.025);
+  }
+}
+
 .campo-display {
   font-family: Georgia, "Times New Roman", serif;
   font-weight: 700;

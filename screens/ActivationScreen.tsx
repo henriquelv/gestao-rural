@@ -84,8 +84,8 @@ export const ActivationScreen: React.FC<Props> = ({ onActivated }) => {
   };
 
   return (
-    <div className="flex h-[100dvh] min-h-0 items-stretch justify-center overflow-hidden bg-[#e9e7e1]">
-      <div className="flex h-full min-h-0 w-full max-w-md flex-col border-x border-[#d8d0c2] bg-[#f8f4eb] pt-[env(safe-area-inset-top)]">
+    <div className="flex h-[100dvh] min-h-0 items-stretch justify-center overflow-hidden bg-[#e9e7e1] md:p-4">
+      <div className="flex h-full min-h-0 w-full max-w-md flex-col border-x border-[#d8d0c2] bg-[#f8f4eb] pt-[env(safe-area-inset-top)] shadow-xl md:h-[calc(100dvh-2rem)] md:max-w-xl md:overflow-hidden md:rounded-[28px] md:border">
         <div className="shrink-0 bg-[#173f32] px-6 py-6 text-white">
           <div className="flex items-center gap-3">
             <div className="w-12 h-12 rounded-xl bg-white/10 flex items-center justify-center border border-white/15">

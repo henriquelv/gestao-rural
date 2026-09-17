@@ -18,7 +18,7 @@ export const Header: React.FC<HeaderProps> = ({ title, showBack = true, targetRo
   };
 
   return (
-    <header className="sticky top-0 z-50 flex h-[72px] shrink-0 items-center border-b border-[#d8d0c2] bg-[#f8f4eb] px-4 shadow-[0_5px_18px_rgba(29,55,45,0.08)]">
+    <header className="sticky top-0 z-50 flex h-[72px] shrink-0 items-center border-b border-[#d8d0c2] bg-[#f8f4eb] px-4 shadow-[0_5px_18px_rgba(29,55,45,0.08)] md:h-[80px] md:px-6">
       {showBack && (
         <button
           type="button"
@@ -31,7 +31,7 @@ export const Header: React.FC<HeaderProps> = ({ title, showBack = true, targetRo
       )}
 
       <div className="flex min-w-0 flex-1 items-center justify-between gap-3">
-        <h1 className="campo-display max-h-10 min-w-0 flex-1 overflow-hidden text-lg leading-5 tracking-[-0.015em] text-[#173f32]">
+        <h1 className="campo-display max-h-12 min-w-0 flex-1 overflow-hidden text-lg leading-5 tracking-[-0.015em] text-[#173f32] md:text-2xl md:leading-7">
           {title}
         </h1>
         <div className="shrink-0 rounded-lg bg-white px-2 py-0.5 shadow-sm">

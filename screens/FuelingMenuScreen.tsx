@@ -31,8 +31,8 @@ export const FuelingMenuScreen: React.FC = () => {
   const navigate = useNavigate();
   return <Layout className="bg-[#f4f0e7]">
     <Header title="Abastecimentos" targetRoute="/" />
-    <main className="campo-field-lines min-h-0 flex-1 touch-pan-y overflow-y-auto overscroll-contain px-4 pb-8 pt-5 [-webkit-overflow-scrolling:touch]">
-      <div className="space-y-4">
+    <main className="campo-field-lines min-h-0 flex-1 touch-pan-y overflow-y-auto overscroll-contain px-4 pb-8 pt-5 [-webkit-overflow-scrolling:touch] md:px-6 md:pt-6">
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         {options.map(({ route, title, description, Icon, DetailIcon, className, iconClassName, descriptionClassName }) => <button
           key={route}
           type="button"
