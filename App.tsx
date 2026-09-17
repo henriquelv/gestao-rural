@@ -28,6 +28,7 @@ const AnomalyQuantityScreen = React.lazy(() => import('./screens/AnomalyQuantity
 const ClientDashboardScreen = React.lazy(() => import('./screens/ClientDashboardScreen').then((module) => ({ default: module.ClientDashboardScreen })));
 const RuminaInsightsScreen = React.lazy(() => import('./screens/RuminaInsightsScreen').then((module) => ({ default: module.RuminaInsightsScreen })));
 const AgendaScreen = React.lazy(() => import('./screens/AgendaScreen').then((module) => ({ default: module.AgendaScreen })));
+const FuelingMenuScreen = React.lazy(() => import('./screens/FuelingMenuScreen').then((module) => ({ default: module.FuelingMenuScreen })));
 const FuelingScreen = React.lazy(() => import('./screens/FuelingScreen').then((module) => ({ default: module.FuelingScreen })));
 const InstructionsMenuScreen = React.lazy(() => import('./screens/instructions/InstructionsMenuScreen').then((module) => ({ default: module.InstructionsMenuScreen })));
 const InstructionsSectorMenuScreen = React.lazy(() => import('./screens/instructions/InstructionsSectorMenuScreen').then((module) => ({ default: module.InstructionsSectorMenuScreen })));
@@ -329,7 +330,9 @@ const App: React.FC = () => {
         <Route path="/" element={<HomeScreen />} />
         <Route path="/profile" element={<ProfileScreen />} />
         <Route path="/agenda" element={<AgendaScreen />} />
-        <Route path="/fuelings" element={<FuelingScreen />} />
+        <Route path="/fuelings" element={<FuelingMenuScreen />} />
+        <Route path="/fuelings/new" element={<FuelingScreen />} />
+        <Route path="/fuelings/history" element={<FuelingScreen />} />
 
         {/* Anomalias: ADICIONAR LIVRE */}
         <Route path="/anomalies" element={<AnomaliesMenuScreen />} />

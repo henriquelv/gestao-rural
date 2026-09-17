@@ -13,7 +13,7 @@ const context={farm_id:'11111111-1111-4111-8111-111111111111',farm_name:'QA',emp
 try{
   await send('Page.enable');await send('Runtime.enable');await send('Emulation.setDeviceMetricsOverride',{width:390,height:720,deviceScaleFactor:1,mobile:true});
   await send('Page.addScriptToEvaluateOnNewDocument',{source:`Object.defineProperty(navigator,'onLine',{get:()=>false});localStorage.setItem('gestao_rural_farm_context_v2',JSON.stringify(${JSON.stringify(context)}));['campo_legado_test_period_reset_2026_08_03_v1','campo_legado_remove_legacy_records_v1','error_cleanup_v1'].forEach(k=>localStorage.setItem(k,'true'));`});
-  const started=Date.now();await send('Page.navigate',{url:`${origin}/#/fuelings`});
+  const started=Date.now();await send('Page.navigate',{url:`${origin}/#/fuelings/new`});
   for(let i=0;i<200&&!await evaluate(`document.body?.innerText.includes('SALVAR ABASTECIMENTO')`);i++)await new Promise(r=>setTimeout(r,50));
   const before=await evaluate(`(()=>{const main=document.querySelector('main');return {scrollHeight:main.scrollHeight,clientHeight:main.clientHeight,overflow:getComputedStyle(main).overflowY,bodyOverflow:getComputedStyle(document.body).overflow,touchAction:getComputedStyle(main).touchAction};})()`);
   await send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:190,y:600}]});
